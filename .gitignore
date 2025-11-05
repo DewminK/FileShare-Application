@@ -30,3 +30,5 @@ bin/
 
 .idea/
 *.iml
+
+javafx-sdk-21.0.1
