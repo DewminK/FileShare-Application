@@ -32,3 +32,8 @@ bin/
 *.iml
 
 javafx-sdk-21.0.1
+
+### Documentation ###
+README.md
+*_README.md
+*.md

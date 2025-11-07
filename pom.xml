@@ -68,6 +68,14 @@
                 <configuration>
                     <mainClass>client.ClientUI</mainClass>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>server</id>
+                        <configuration>
+                            <mainClass>server.ServerUI</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
