@@ -8,13 +8,22 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.scene.control.cell.PropertyValueFactory;
+import shared.FileHandler;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * JavaFX-based User Interface for File Sharing Server
@@ -49,24 +58,39 @@ public class ServerUI extends Application {
     public void start(Stage primaryStage) {
         primaryStage.setTitle("File Sharing Server - Network Programming");
 
+        // Create TabPane for multiple views
+        TabPane tabPane = new TabPane();
+        tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        // Tab 1: Server Management
+        Tab serverTab = new Tab("Server Management");
+        BorderPane serverLayout = new BorderPane();
+        serverLayout.setPadding(new Insets(10));
+
+        VBox topPanel = createServerControlPanel();
+        serverLayout.setTop(topPanel);
+
+        SplitPane centerPanel = createCenterPanel();
+        serverLayout.setCenter(centerPanel);
+
+        VBox bottomPanel = createLogPanel();
+        serverLayout.setBottom(bottomPanel);
+
+        serverTab.setContent(serverLayout);
+
+        // Tab 2: FileHandler Testing
+        Tab fileHandlerTab = new Tab("FileHandler Testing");
+        BorderPane fileHandlerLayout = createFileHandlerTestPanel();
+        fileHandlerTab.setContent(fileHandlerLayout);
+
+        tabPane.getTabs().addAll(serverTab, fileHandlerTab);
+
         // Main layout
         BorderPane mainLayout = new BorderPane();
-        mainLayout.setPadding(new Insets(10));
-
-        // Top: Server Control Panel
-        VBox topPanel = createServerControlPanel();
-        mainLayout.setTop(topPanel);
-
-        // Center: Split view with clients and files
-        SplitPane centerPanel = createCenterPanel();
-        mainLayout.setCenter(centerPanel);
-
-        // Bottom: Log and Statistics
-        VBox bottomPanel = createLogPanel();
-        mainLayout.setBottom(bottomPanel);
+        mainLayout.setCenter(tabPane);
 
         // Create scene and apply CSS
-        Scene scene = new Scene(mainLayout, 1000, 750);
+        Scene scene = new Scene(mainLayout, 1100, 800);
 
         // Try to load CSS, but don't fail if it's not found
         try {
@@ -513,6 +537,334 @@ public class ServerUI extends Application {
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
+    }
+
+    /**
+     * Create FileHandler testing panel with both blocking and non-blocking tests
+     */
+    private BorderPane createFileHandlerTestPanel() {
+        BorderPane layout = new BorderPane();
+        layout.setPadding(new Insets(15));
+
+        // Top: Title and description
+        VBox headerBox = new VBox(10);
+        headerBox.setPadding(new Insets(10));
+        headerBox.setStyle("-fx-background-color: #e3f2fd; -fx-border-color: #2196F3; -fx-border-width: 2;");
+
+        Label titleLabel = new Label("FileHandler Non-Blocking I/O Testing");
+        titleLabel.setStyle("-fx-font-size: 20px; -fx-font-weight: bold; -fx-text-fill: #1976D2;");
+
+        Label descLabel = new Label("Test the FileHandler class with Selector-based non-blocking I/O.\n" +
+                "The FileHandler automatically detects blocking mode and uses appropriate transfer method.");
+        descLabel.setStyle("-fx-font-size: 12px;");
+        descLabel.setWrapText(true);
+
+        headerBox.getChildren().addAll(titleLabel, descLabel);
+        layout.setTop(headerBox);
+
+        // Center: Test Controls
+        VBox centerBox = new VBox(20);
+        centerBox.setPadding(new Insets(20));
+
+        // File Selection
+        VBox fileSelectionBox = new VBox(10);
+        fileSelectionBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+
+        Label fileLabel = new Label("1. Select Test File:");
+        fileLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
+        HBox fileBox = new HBox(10);
+        TextField testFileField = new TextField();
+        testFileField.setPromptText("Select a file to test transfer...");
+        testFileField.setPrefWidth(400);
+        testFileField.setEditable(false);
+
+        Button browseTestFile = new Button("Browse...");
+        browseTestFile.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white; -fx-font-weight: bold;");
+        browseTestFile.setOnAction(e -> {
+            FileChooser fileChooser = new FileChooser();
+            fileChooser.setTitle("Select Test File");
+            File file = fileChooser.showOpenDialog(null);
+            if (file != null) {
+                testFileField.setText(file.getAbsolutePath());
+            }
+        });
+
+        fileBox.getChildren().addAll(testFileField, browseTestFile);
+        fileSelectionBox.getChildren().addAll(fileLabel, fileBox);
+
+        // Transfer Mode Selection
+        VBox modeBox = new VBox(10);
+        modeBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+
+        Label modeLabel = new Label("2. Select Transfer Mode:");
+        modeLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
+        ToggleGroup modeGroup = new ToggleGroup();
+        RadioButton blockingMode = new RadioButton("Blocking Mode (Traditional Socket)");
+        blockingMode.setToggleGroup(modeGroup);
+        blockingMode.setSelected(true);
+
+        RadioButton nonBlockingMode = new RadioButton("Non-Blocking Mode (Selector-based SocketChannel)");
+        nonBlockingMode.setToggleGroup(modeGroup);
+
+        Label modeInfoLabel = new Label("Blocking: Uses standard blocking sockets\nNon-Blocking: Uses NIO Selectors for event-driven I/O");
+        modeInfoLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666; -fx-padding: 5 0 0 25;");
+
+        modeBox.getChildren().addAll(modeLabel, blockingMode, nonBlockingMode, modeInfoLabel);
+
+        // Test Server Configuration
+        VBox configBox = new VBox(10);
+        configBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+
+        Label configLabel = new Label("3. Test Server Configuration:");
+        configLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
+        HBox portBox = new HBox(10);
+        portBox.setAlignment(Pos.CENTER_LEFT);
+        Label portLabel = new Label("Test Port:");
+        TextField testPortField = new TextField("9090");
+        testPortField.setPrefWidth(100);
+        portBox.getChildren().addAll(portLabel, testPortField);
+
+        configBox.getChildren().addAll(configLabel, portBox);
+
+        // Action Buttons
+        HBox buttonBox = new HBox(15);
+        buttonBox.setAlignment(Pos.CENTER);
+        buttonBox.setPadding(new Insets(20, 0, 0, 0));
+
+        Button startTestButton = new Button("Start Transfer Test");
+        startTestButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 14px; -fx-padding: 10 30;");
+
+        Button clearLogButton = new Button("Clear Log");
+        clearLogButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 10 30;");
+
+        ProgressBar testProgressBar = new ProgressBar(0);
+        testProgressBar.setPrefWidth(300);
+        testProgressBar.setVisible(false);
+
+        buttonBox.getChildren().addAll(startTestButton, clearLogButton, testProgressBar);
+
+        centerBox.getChildren().addAll(fileSelectionBox, modeBox, configBox, buttonBox);
+        layout.setCenter(centerBox);
+
+        // Bottom: Test Log
+        VBox logBox = new VBox(10);
+        logBox.setPadding(new Insets(10));
+        logBox.setPrefHeight(250);
+
+        Label logLabel = new Label("Test Activity Log:");
+        logLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
+
+        TextArea testLogArea = new TextArea();
+        testLogArea.setEditable(false);
+        testLogArea.setPrefHeight(200);
+        testLogArea.setStyle("-fx-font-family: 'Consolas', 'Courier New', monospace; -fx-font-size: 12px;");
+        testLogArea.setText("=== FileHandler Non-Blocking I/O Testing Console ===\nReady to test. Select a file and click 'Start Transfer Test'.\n");
+
+        logBox.getChildren().addAll(logLabel, testLogArea);
+        layout.setBottom(logBox);
+
+        // Clear Log Action
+        clearLogButton.setOnAction(e -> {
+            testLogArea.clear();
+            testLogArea.setText("=== FileHandler Non-Blocking I/O Testing Console ===\nLog cleared.\n");
+        });
+
+        // Start Test Action
+        ExecutorService testExecutor = Executors.newCachedThreadPool();
+
+        startTestButton.setOnAction(e -> {
+            String filePath = testFileField.getText();
+            if (filePath.isEmpty()) {
+                testLogArea.appendText("[ERROR] Please select a test file first.\n");
+                return;
+            }
+
+            File testFile = new File(filePath);
+            if (!testFile.exists()) {
+                testLogArea.appendText("[ERROR] Selected file does not exist.\n");
+                return;
+            }
+
+            int testPort;
+            try {
+                testPort = Integer.parseInt(testPortField.getText());
+            } catch (NumberFormatException ex) {
+                testLogArea.appendText("[ERROR] Invalid port number.\n");
+                return;
+            }
+
+            boolean useNonBlocking = nonBlockingMode.isSelected();
+            String mode = useNonBlocking ? "NON-BLOCKING (Selector)" : "BLOCKING (Traditional)";
+
+            testLogArea.appendText("\n" + "=".repeat(60) + "\n");
+            testLogArea.appendText("[TEST START] Testing FileHandler in " + mode + " mode\n");
+            testLogArea.appendText("[INFO] File: " + testFile.getName() + " (" + formatFileSize(testFile.length()) + ")\n");
+            testLogArea.appendText("[INFO] Port: " + testPort + "\n");
+            testLogArea.appendText("=".repeat(60) + "\n");
+
+            startTestButton.setDisable(true);
+            testProgressBar.setVisible(true);
+            testProgressBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+
+            // Run test in background
+            testExecutor.submit(() -> {
+                try {
+                    runFileHandlerTest(testFile, testPort, useNonBlocking, testLogArea, testProgressBar, startTestButton);
+                } catch (Exception ex) {
+                    Platform.runLater(() -> {
+                        testLogArea.appendText("[ERROR] Test failed: " + ex.getMessage() + "\n");
+                        testProgressBar.setVisible(false);
+                        startTestButton.setDisable(false);
+                    });
+                }
+            });
+        });
+
+        return layout;
+    }
+
+    /**
+     * Run FileHandler test with selected mode
+     */
+    private void runFileHandlerTest(File testFile, int port, boolean useNonBlocking,
+                                     TextArea logArea, ProgressBar progressBar, Button startButton) {
+        FileHandler fileHandler = new FileHandler();
+        ServerSocketChannel serverChannel = null;
+        SocketChannel clientChannel = null;
+
+        try {
+            long startTime = System.currentTimeMillis();
+
+            // Phase 1: Setup server
+            Platform.runLater(() -> logArea.appendText("[PHASE 1] Setting up test server...\n"));
+
+            serverChannel = ServerSocketChannel.open();
+            serverChannel.bind(new InetSocketAddress(port));
+
+            if (useNonBlocking) {
+                serverChannel.configureBlocking(false);
+                Platform.runLater(() -> logArea.appendText("[INFO] Server configured as NON-BLOCKING\n"));
+            } else {
+                Platform.runLater(() -> logArea.appendText("[INFO] Server configured as BLOCKING\n"));
+            }
+
+            Platform.runLater(() -> logArea.appendText("[SUCCESS] Test server listening on port " + port + "\n"));
+
+            // Phase 2: Setup client connection
+            Platform.runLater(() -> {
+                logArea.appendText("[PHASE 2] Establishing client connection...\n");
+                progressBar.setProgress(0.2);
+            });
+
+            // Accept connection in separate thread
+            final ServerSocketChannel finalServerChannel = serverChannel;
+            Thread acceptThread = new Thread(() -> {
+                try {
+                    SocketChannel accepted = finalServerChannel.accept();
+                    if (accepted != null) {
+                        Platform.runLater(() -> logArea.appendText("[SUCCESS] Client connected\n"));
+                    }
+                } catch (IOException e) {
+                    Platform.runLater(() -> logArea.appendText("[ERROR] Accept failed: " + e.getMessage() + "\n"));
+                }
+            });
+            acceptThread.start();
+
+            Thread.sleep(500); // Wait for server to be ready
+
+            clientChannel = SocketChannel.open();
+            clientChannel.connect(new InetSocketAddress("localhost", port));
+
+            if (useNonBlocking) {
+                clientChannel.configureBlocking(false);
+                Platform.runLater(() -> logArea.appendText("[INFO] Client configured as NON-BLOCKING\n"));
+            } else {
+                Platform.runLater(() -> logArea.appendText("[INFO] Client configured as BLOCKING\n"));
+            }
+
+            Platform.runLater(() -> {
+                logArea.appendText("[SUCCESS] Connection established\n");
+                progressBar.setProgress(0.4);
+            });
+
+            // Phase 3: File Transfer
+            Platform.runLater(() -> logArea.appendText("[PHASE 3] Starting file transfer...\n"));
+
+            long transferStart = System.currentTimeMillis();
+            long bytesSent = fileHandler.sendFile(Paths.get(testFile.getAbsolutePath()), clientChannel);
+            long transferTime = System.currentTimeMillis() - transferStart;
+
+            Platform.runLater(() -> {
+                logArea.appendText("[SUCCESS] Transfer completed\n");
+                logArea.appendText("[STATS] Bytes sent: " + bytesSent + " bytes\n");
+                logArea.appendText("[STATS] Transfer time: " + transferTime + " ms\n");
+                logArea.appendText("[STATS] Transfer speed: " +
+                    String.format("%.2f", (bytesSent / 1024.0 / 1024.0) / (transferTime / 1000.0)) + " MB/s\n");
+                progressBar.setProgress(0.8);
+            });
+
+            // Phase 4: Cleanup
+            Platform.runLater(() -> logArea.appendText("[PHASE 4] Cleaning up...\n"));
+
+            if (clientChannel != null) clientChannel.close();
+            if (serverChannel != null) serverChannel.close();
+
+            long totalTime = System.currentTimeMillis() - startTime;
+
+            Platform.runLater(() -> {
+                logArea.appendText("[SUCCESS] Test completed successfully\n");
+                logArea.appendText("[TOTAL TIME] " + totalTime + " ms\n");
+                logArea.appendText("=".repeat(60) + "\n");
+                logArea.appendText("[RESULT] ✓ FileHandler " + (useNonBlocking ? "NON-BLOCKING" : "BLOCKING") +
+                    " mode working correctly!\n");
+                logArea.appendText("=".repeat(60) + "\n\n");
+                progressBar.setProgress(1.0);
+
+                // Hide progress bar and re-enable button after 2 seconds
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(2000);
+                        Platform.runLater(() -> {
+                            progressBar.setVisible(false);
+                            progressBar.setProgress(0);
+                            startButton.setDisable(false);
+                        });
+                    } catch (InterruptedException ex) {
+                        ex.printStackTrace();
+                    }
+                }).start();
+            });
+
+        } catch (Exception e) {
+            Platform.runLater(() -> {
+                logArea.appendText("[ERROR] Test failed: " + e.getClass().getSimpleName() + "\n");
+                logArea.appendText("[ERROR] Message: " + e.getMessage() + "\n");
+                e.printStackTrace();
+                logArea.appendText("=".repeat(60) + "\n\n");
+                progressBar.setVisible(false);
+                startButton.setDisable(false);
+            });
+        } finally {
+            try {
+                if (clientChannel != null && clientChannel.isOpen()) clientChannel.close();
+                if (serverChannel != null && serverChannel.isOpen()) serverChannel.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Format file size for display
+     */
+    private String formatFileSize(long size) {
+        if (size < 1024) return size + " B";
+        if (size < 1024 * 1024) return String.format("%.2f KB", size / 1024.0);
+        if (size < 1024 * 1024 * 1024) return String.format("%.2f MB", size / (1024.0 * 1024));
+        return String.format("%.2f GB", size / (1024.0 * 1024 * 1024));
     }
 
     /**
