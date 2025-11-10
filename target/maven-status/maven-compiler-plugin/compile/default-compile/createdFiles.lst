@@ -22,6 +22,7 @@ client\ClientMain$1.class
 client\ClientUI$FileInfo.class
 client\ClientUI.class
 server\ServerUI$FileInfo.class
+shared\FileHandler.class
 server\ServerUI$ClientInfo.class
 client\ClientUI$3.class
 client\FileTransferHandler$2.class
