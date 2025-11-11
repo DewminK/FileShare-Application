@@ -27,7 +27,8 @@ import java.util.concurrent.Executors;
 
 /**
  * JavaFX-based User Interface for File Sharing Server
- * Provides a modern GUI for managing the server, viewing connected clients and activity
+ * Provides a modern GUI for managing the server, viewing connected clients and
+ * activity
  * Uses the same design structure as ClientUI
  */
 public class ServerUI extends Application {
@@ -53,6 +54,11 @@ public class ServerUI extends Application {
 
     private Button refreshFilesButton;
     private Button openFolderButton;
+
+    // Chat components
+    private TextArea serverChatArea;
+    private TextField serverChatInputField;
+    private Button serverChatSendButton;
 
     @Override
     public void start(Stage primaryStage) {
@@ -129,7 +135,7 @@ public class ServerUI extends Application {
         controlBox.setAlignment(Pos.CENTER_LEFT);
 
         Label portLabel = new Label("Port:");
-        serverPortField = new TextField("8080");
+        serverPortField = new TextField("9090");
         serverPortField.setPrefWidth(80);
 
         Label dirLabel = new Label("Shared Directory:");
@@ -153,8 +159,8 @@ public class ServerUI extends Application {
         statusLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #ff0000;");
 
         controlBox.getChildren().addAll(portLabel, serverPortField, dirLabel,
-                                        sharedDirField, browseButton, startButton, stopButton,
-                                        new Region(), statusLabel);
+                sharedDirField, browseButton, startButton, stopButton,
+                new Region(), statusLabel);
         HBox.setHgrow(controlBox.getChildren().get(controlBox.getChildren().size() - 2), Priority.ALWAYS);
 
         panel.getChildren().addAll(titleLabel, controlBox);
@@ -162,20 +168,97 @@ public class ServerUI extends Application {
     }
 
     /**
-     * Create center panel with clients and files tables
+     * Create center panel with clients, files, and chat
      */
     private SplitPane createCenterPanel() {
         SplitPane splitPane = new SplitPane();
-        splitPane.setDividerPositions(0.5);
+        splitPane.setDividerPositions(0.33, 0.66); // Three equal sections
 
         // Left: Connected Clients
         VBox clientPanel = createClientPanel();
 
-        // Right: Shared Files
+        // Middle: Shared Files
         VBox filePanel = createFilePanel();
 
-        splitPane.getItems().addAll(clientPanel, filePanel);
+        // Right: Chat Monitor
+        VBox chatPanel = createServerChatPanel();
+
+        splitPane.getItems().addAll(clientPanel, filePanel, chatPanel);
         return splitPane;
+    }
+
+    /**
+     * Create server chat monitoring panel
+     */
+    private VBox createServerChatPanel() {
+        VBox panel = new VBox(10);
+        panel.setPadding(new Insets(10));
+        VBox.setVgrow(panel, Priority.ALWAYS);
+
+        Label titleLabel = new Label("💬 Chat Monitor");
+        titleLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #4CAF50;");
+
+        // Chat messages area
+        serverChatArea = new TextArea();
+        serverChatArea.setEditable(false);
+        serverChatArea.setWrapText(true);
+        serverChatArea.setStyle("-fx-control-inner-background: #f5f5f5; -fx-font-family: 'Segoe UI';");
+        VBox.setVgrow(serverChatArea, Priority.ALWAYS);
+
+        // Server broadcast input
+        Label broadcastLabel = new Label("Broadcast to all clients:");
+        broadcastLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 11px;");
+
+        HBox chatInputBox = new HBox(10);
+        chatInputBox.setAlignment(Pos.CENTER);
+
+        serverChatInputField = new TextField();
+        serverChatInputField.setPromptText("Type server announcement...");
+        serverChatInputField.setDisable(true);
+        HBox.setHgrow(serverChatInputField, Priority.ALWAYS);
+        serverChatInputField.setOnAction(e -> sendServerBroadcast());
+
+        serverChatSendButton = new Button("Broadcast");
+        serverChatSendButton.setStyle("-fx-background-color: #FF5722; -fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 8 15;");
+        serverChatSendButton.setDisable(true);
+        serverChatSendButton.setOnAction(e -> sendServerBroadcast());
+
+        chatInputBox.getChildren().addAll(serverChatInputField, serverChatSendButton);
+
+        panel.getChildren().addAll(titleLabel, serverChatArea, broadcastLabel, chatInputBox);
+        return panel;
+    }
+
+    /**
+     * Send server broadcast message to all connected clients
+     */
+    private void sendServerBroadcast() {
+        String message = serverChatInputField.getText().trim();
+        if (message.isEmpty() || server == null) {
+            return;
+        }
+
+        try {
+            // Broadcast through server
+            server.broadcastChatMessage("SERVER", message);
+
+            // Display in server chat monitor
+            appendServerChatMessage("SERVER", message);
+            serverChatInputField.clear();
+        } catch (Exception e) {
+            log("Error broadcasting message: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Append chat message to server chat monitor
+     */
+    public void appendServerChatMessage(String sender, String message) {
+        Platform.runLater(() -> {
+            String timestamp = java.time.LocalTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            serverChatArea.appendText(String.format("[%s] %s: %s\n", timestamp, sender, message));
+        });
     }
 
     /**
@@ -306,12 +389,12 @@ public class ServerUI extends Application {
     private void browseDirectory() {
         DirectoryChooser directoryChooser = new DirectoryChooser();
         directoryChooser.setTitle("Select Shared Directory");
-        
+
         File currentDir = new File(sharedDirField.getText());
         if (currentDir.exists() && currentDir.isDirectory()) {
             directoryChooser.setInitialDirectory(currentDir);
         }
-        
+
         File selectedDirectory = directoryChooser.showDialog(null);
         if (selectedDirectory != null) {
             sharedDirField.setText(selectedDirectory.getAbsolutePath());
@@ -339,8 +422,8 @@ public class ServerUI extends Application {
         // Create server instance
         server = new ServerMain(port, sharedDir);
 
-        // Add listener for server events
-        server.addServerListener(new ServerMain.ServerListener() {
+        // Add listener for server events (implementing ChatListener)
+        server.addServerListener(new ServerMain.ChatListener() {
             @Override
             public void onServerStarted(int port) {
                 Platform.runLater(() -> {
@@ -402,6 +485,14 @@ public class ServerUI extends Application {
                     showAlert("Server Error", error);
                 });
             }
+
+            @Override
+            public void onChatMessage(String sender, String message) {
+                Platform.runLater(() -> {
+                    appendServerChatMessage(sender, message);
+                    log("💬 Chat from " + sender + ": " + message);
+                });
+            }
         });
 
         // Start server in a separate thread
@@ -437,6 +528,11 @@ public class ServerUI extends Application {
             serverPortField.setDisable(true);
             sharedDirField.setDisable(true);
             browseButton.setDisable(true);
+
+            // Enable server chat broadcast
+            serverChatInputField.setDisable(false);
+            serverChatSendButton.setDisable(false);
+            appendServerChatMessage("System", "Server started - Chat monitoring active");
         } else {
             statusLabel.setText("Status: Stopped");
             statusLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #ff0000;");
@@ -445,6 +541,11 @@ public class ServerUI extends Application {
             serverPortField.setDisable(false);
             sharedDirField.setDisable(false);
             browseButton.setDisable(false);
+
+            // Disable server chat broadcast
+            serverChatInputField.setDisable(true);
+            serverChatSendButton.setDisable(true);
+            serverChatArea.clear();
         }
     }
 
@@ -470,25 +571,24 @@ public class ServerUI extends Application {
      */
     private void refreshFileList() {
         fileList.clear();
-        
+
         String sharedDir = sharedDirField.getText();
         File dir = new File(sharedDir);
-        
+
         if (dir.exists() && dir.isDirectory()) {
             File[] files = dir.listFiles();
             if (files != null) {
                 for (File file : files) {
                     if (file.isFile()) {
                         fileList.add(new FileInfo(
-                            file.getName(),
-                            file.length(),
-                            new java.util.Date(file.lastModified()).toString()
-                        ));
+                                file.getName(),
+                                file.length(),
+                                new java.util.Date(file.lastModified()).toString()));
                     }
                 }
             }
         }
-        
+
         updateStatistics();
     }
 
@@ -514,7 +614,7 @@ public class ServerUI extends Application {
     private void updateStatistics() {
         int clientCount = clientList.size();
         int fileCount = fileList.size();
-        
+
         String status = server != null && server.isRunning() ? "Running" : "Stopped";
         statsLabel.setText(status + " | Clients: " + clientCount + " | Files: " + fileCount);
     }
@@ -524,7 +624,7 @@ public class ServerUI extends Application {
      */
     private void log(String message) {
         String timestamp = java.time.LocalTime.now().format(
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         logArea.appendText("[" + timestamp + "] " + message + "\n");
     }
 
@@ -568,7 +668,8 @@ public class ServerUI extends Application {
 
         // File Selection
         VBox fileSelectionBox = new VBox(10);
-        fileSelectionBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+        fileSelectionBox.setStyle(
+                "-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
 
         Label fileLabel = new Label("1. Select Test File:");
         fileLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
@@ -595,7 +696,8 @@ public class ServerUI extends Application {
 
         // Transfer Mode Selection
         VBox modeBox = new VBox(10);
-        modeBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+        modeBox.setStyle(
+                "-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
 
         Label modeLabel = new Label("2. Select Transfer Mode:");
         modeLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
@@ -608,14 +710,16 @@ public class ServerUI extends Application {
         RadioButton nonBlockingMode = new RadioButton("Non-Blocking Mode (Selector-based SocketChannel)");
         nonBlockingMode.setToggleGroup(modeGroup);
 
-        Label modeInfoLabel = new Label("Blocking: Uses standard blocking sockets\nNon-Blocking: Uses NIO Selectors for event-driven I/O");
+        Label modeInfoLabel = new Label(
+                "Blocking: Uses standard blocking sockets\nNon-Blocking: Uses NIO Selectors for event-driven I/O");
         modeInfoLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666; -fx-padding: 5 0 0 25;");
 
         modeBox.getChildren().addAll(modeLabel, blockingMode, nonBlockingMode, modeInfoLabel);
 
         // Test Server Configuration
         VBox configBox = new VBox(10);
-        configBox.setStyle("-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
+        configBox.setStyle(
+                "-fx-background-color: #f5f5f5; -fx-padding: 15; -fx-border-color: #cccccc; -fx-border-width: 1;");
 
         Label configLabel = new Label("3. Test Server Configuration:");
         configLabel.setStyle("-fx-font-size: 14px; -fx-font-weight: bold;");
@@ -635,10 +739,12 @@ public class ServerUI extends Application {
         buttonBox.setPadding(new Insets(20, 0, 0, 0));
 
         Button startTestButton = new Button("Start Transfer Test");
-        startTestButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 14px; -fx-padding: 10 30;");
+        startTestButton.setStyle(
+                "-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 14px; -fx-padding: 10 30;");
 
         Button clearLogButton = new Button("Clear Log");
-        clearLogButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 10 30;");
+        clearLogButton.setStyle(
+                "-fx-background-color: #FF9800; -fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 10 30;");
 
         ProgressBar testProgressBar = new ProgressBar(0);
         testProgressBar.setPrefWidth(300);
@@ -661,7 +767,8 @@ public class ServerUI extends Application {
         testLogArea.setEditable(false);
         testLogArea.setPrefHeight(200);
         testLogArea.setStyle("-fx-font-family: 'Consolas', 'Courier New', monospace; -fx-font-size: 12px;");
-        testLogArea.setText("=== FileHandler Non-Blocking I/O Testing Console ===\nReady to test. Select a file and click 'Start Transfer Test'.\n");
+        testLogArea.setText(
+                "=== FileHandler Non-Blocking I/O Testing Console ===\nReady to test. Select a file and click 'Start Transfer Test'.\n");
 
         logBox.getChildren().addAll(logLabel, testLogArea);
         layout.setBottom(logBox);
@@ -701,7 +808,8 @@ public class ServerUI extends Application {
 
             testLogArea.appendText("\n" + "=".repeat(60) + "\n");
             testLogArea.appendText("[TEST START] Testing FileHandler in " + mode + " mode\n");
-            testLogArea.appendText("[INFO] File: " + testFile.getName() + " (" + formatFileSize(testFile.length()) + ")\n");
+            testLogArea.appendText(
+                    "[INFO] File: " + testFile.getName() + " (" + formatFileSize(testFile.length()) + ")\n");
             testLogArea.appendText("[INFO] Port: " + testPort + "\n");
             testLogArea.appendText("=".repeat(60) + "\n");
 
@@ -712,7 +820,8 @@ public class ServerUI extends Application {
             // Run test in background
             testExecutor.submit(() -> {
                 try {
-                    runFileHandlerTest(testFile, testPort, useNonBlocking, testLogArea, testProgressBar, startTestButton);
+                    runFileHandlerTest(testFile, testPort, useNonBlocking, testLogArea, testProgressBar,
+                            startTestButton);
                 } catch (Exception ex) {
                     Platform.runLater(() -> {
                         testLogArea.appendText("[ERROR] Test failed: " + ex.getMessage() + "\n");
@@ -730,7 +839,7 @@ public class ServerUI extends Application {
      * Run FileHandler test with selected mode
      */
     private void runFileHandlerTest(File testFile, int port, boolean useNonBlocking,
-                                     TextArea logArea, ProgressBar progressBar, Button startButton) {
+                                    TextArea logArea, ProgressBar progressBar, Button startButton) {
         FileHandler fileHandler = new FileHandler();
         ServerSocketChannel serverChannel = null;
         SocketChannel clientChannel = null;
@@ -802,15 +911,17 @@ public class ServerUI extends Application {
                 logArea.appendText("[STATS] Bytes sent: " + bytesSent + " bytes\n");
                 logArea.appendText("[STATS] Transfer time: " + transferTime + " ms\n");
                 logArea.appendText("[STATS] Transfer speed: " +
-                    String.format("%.2f", (bytesSent / 1024.0 / 1024.0) / (transferTime / 1000.0)) + " MB/s\n");
+                        String.format("%.2f", (bytesSent / 1024.0 / 1024.0) / (transferTime / 1000.0)) + " MB/s\n");
                 progressBar.setProgress(0.8);
             });
 
             // Phase 4: Cleanup
             Platform.runLater(() -> logArea.appendText("[PHASE 4] Cleaning up...\n"));
 
-            if (clientChannel != null) clientChannel.close();
-            if (serverChannel != null) serverChannel.close();
+            if (clientChannel != null)
+                clientChannel.close();
+            if (serverChannel != null)
+                serverChannel.close();
 
             long totalTime = System.currentTimeMillis() - startTime;
 
@@ -819,7 +930,7 @@ public class ServerUI extends Application {
                 logArea.appendText("[TOTAL TIME] " + totalTime + " ms\n");
                 logArea.appendText("=".repeat(60) + "\n");
                 logArea.appendText("[RESULT] ✓ FileHandler " + (useNonBlocking ? "NON-BLOCKING" : "BLOCKING") +
-                    " mode working correctly!\n");
+                        " mode working correctly!\n");
                 logArea.appendText("=".repeat(60) + "\n\n");
                 progressBar.setProgress(1.0);
 
@@ -849,8 +960,10 @@ public class ServerUI extends Application {
             });
         } finally {
             try {
-                if (clientChannel != null && clientChannel.isOpen()) clientChannel.close();
-                if (serverChannel != null && serverChannel.isOpen()) serverChannel.close();
+                if (clientChannel != null && clientChannel.isOpen())
+                    clientChannel.close();
+                if (serverChannel != null && serverChannel.isOpen())
+                    serverChannel.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -861,9 +974,12 @@ public class ServerUI extends Application {
      * Format file size for display
      */
     private String formatFileSize(long size) {
-        if (size < 1024) return size + " B";
-        if (size < 1024 * 1024) return String.format("%.2f KB", size / 1024.0);
-        if (size < 1024 * 1024 * 1024) return String.format("%.2f MB", size / (1024.0 * 1024));
+        if (size < 1024)
+            return size + " B";
+        if (size < 1024 * 1024)
+            return String.format("%.2f KB", size / 1024.0);
+        if (size < 1024 * 1024 * 1024)
+            return String.format("%.2f MB", size / (1024.0 * 1024));
         return String.format("%.2f GB", size / (1024.0 * 1024 * 1024));
     }
 
@@ -881,9 +997,17 @@ public class ServerUI extends Application {
             this.connectionTime = connectionTime;
         }
 
-        public String getAddress() { return address; }
-        public String getStatus() { return status; }
-        public String getConnectionTime() { return connectionTime; }
+        public String getAddress() {
+            return address;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public String getConnectionTime() {
+            return connectionTime;
+        }
     }
 
     /**
@@ -903,16 +1027,30 @@ public class ServerUI extends Application {
         }
 
         private String formatSize(long size) {
-            if (size < 1024) return size + " B";
-            if (size < 1024 * 1024) return String.format("%.2f KB", size / 1024.0);
-            if (size < 1024 * 1024 * 1024) return String.format("%.2f MB", size / (1024.0 * 1024));
+            if (size < 1024)
+                return size + " B";
+            if (size < 1024 * 1024)
+                return String.format("%.2f KB", size / 1024.0);
+            if (size < 1024 * 1024 * 1024)
+                return String.format("%.2f MB", size / (1024.0 * 1024));
             return String.format("%.2f GB", size / (1024.0 * 1024 * 1024));
         }
 
-        public String getName() { return name; }
-        public String getSize() { return size; }
-        public long getSizeBytes() { return sizeBytes; }
-        public String getDateModified() { return dateModified; }
+        public String getName() {
+            return name;
+        }
+
+        public String getSize() {
+            return size;
+        }
+
+        public long getSizeBytes() {
+            return sizeBytes;
+        }
+
+        public String getDateModified() {
+            return dateModified;
+        }
     }
 
     public static void main(String[] args) {
