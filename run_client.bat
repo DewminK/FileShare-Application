@@ -1,11 +1,5 @@
 @echo off
 REM Batch file to compile and run the File Sharing Client
-
-echo ========================================
-echo File Sharing Client - Startup Script
-echo ========================================
-echo.
-
 REM Navigate to the project directory
 cd /d "%~dp0"
 
