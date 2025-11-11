@@ -17,12 +17,19 @@ import java.io.File;
 
 /**
  * JavaFX-based User Interface for File Sharing Client
- * Provides a modern GUI for connecting to server, viewing files, uploading and downloading
+ * Provides a modern GUI for connecting to server, viewing files, uploading and
+ * downloading
  */
 public class ClientUI extends Application {
 
     private ClientMain client;
     private FileTransferHandler fileHandler;
+
+
+    // Member 5: UDP Broadcast Listener
+    private Thread udpListenerThread;
+    private volatile boolean listeningForBroadcasts = false;
+    private static final int UDP_PORT = 9876;
 
     // UI Components
     private TextField serverAddressField;
@@ -78,8 +85,12 @@ public class ClientUI extends Application {
         primaryStage.setScene(scene);
         primaryStage.show();
 
+        // Start UDP broadcast listener for Member 5 notifications
+        startUDPListener();
+
         // Handle window close
         primaryStage.setOnCloseRequest(event -> {
+            stopUDPListener();
             if (client != null && client.isConnected()) {
                 client.disconnect();
             }
@@ -88,7 +99,8 @@ public class ClientUI extends Application {
     }
 
     /**
-     * Create connection panel with server address, port, and connect/disconnect buttons
+     * Create connection panel with server address, port, and connect/disconnect
+     * buttons
      */
     private VBox createConnectionPanel() {
         VBox panel = new VBox(10);
@@ -106,7 +118,7 @@ public class ClientUI extends Application {
         serverAddressField.setPrefWidth(150);
 
         Label portLabel = new Label("Port:");
-        serverPortField = new TextField("8080");
+        serverPortField = new TextField("9090");
         serverPortField.setPrefWidth(80);
 
         connectButton = new Button("Connect");
@@ -122,8 +134,8 @@ public class ClientUI extends Application {
         statusLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #ff0000;");
 
         connectionBox.getChildren().addAll(addressLabel, serverAddressField, portLabel,
-                                          serverPortField, connectButton, disconnectButton,
-                                          new Region(), statusLabel);
+                serverPortField, connectButton, disconnectButton,
+                new Region(), statusLabel);
         HBox.setHgrow(connectionBox.getChildren().get(connectionBox.getChildren().size() - 2), Priority.ALWAYS);
 
         panel.getChildren().addAll(titleLabel, connectionBox);
@@ -371,42 +383,42 @@ public class ClientUI extends Application {
         log("Downloading: " + selectedFile.getName());
 
         fileHandler.downloadFile(selectedFile.getName(), selectedFile.getSizeBytes(),
-            new FileTransferHandler.FileTransferListener() {
-                @Override
-                public void onTransferStarted(String filename, long fileSize) {
-                    Platform.runLater(() -> {
-                        progressLabel.setText("Downloading: " + filename);
-                        transferProgressBar.setProgress(0);
-                    });
-                }
+                new FileTransferHandler.FileTransferListener() {
+                    @Override
+                    public void onTransferStarted(String filename, long fileSize) {
+                        Platform.runLater(() -> {
+                            progressLabel.setText("Downloading: " + filename);
+                            transferProgressBar.setProgress(0);
+                        });
+                    }
 
-                @Override
-                public void onProgressUpdate(String filename, int progress) {
-                    Platform.runLater(() -> {
-                        transferProgressBar.setProgress(progress / 100.0);
-                        progressLabel.setText("Downloading: " + filename + " - " + progress + "%");
-                    });
-                }
+                    @Override
+                    public void onProgressUpdate(String filename, int progress) {
+                        Platform.runLater(() -> {
+                            transferProgressBar.setProgress(progress / 100.0);
+                            progressLabel.setText("Downloading: " + filename + " - " + progress + "%");
+                        });
+                    }
 
-                @Override
-                public void onTransferCompleted(String filename, boolean isUpload) {
-                    Platform.runLater(() -> {
-                        log("Download completed: " + filename);
-                        progressLabel.setText("Download completed!");
-                        transferProgressBar.setProgress(1);
-                        showAlert("Download Complete", filename + " has been downloaded to ./downloads/");
-                    });
-                }
+                    @Override
+                    public void onTransferCompleted(String filename, boolean isUpload) {
+                        Platform.runLater(() -> {
+                            log("Download completed: " + filename);
+                            progressLabel.setText("Download completed!");
+                            transferProgressBar.setProgress(1);
+                            showAlert("Download Complete", filename + " has been downloaded to ./downloads/");
+                        });
+                    }
 
-                @Override
-                public void onTransferFailed(String filename, String error) {
-                    Platform.runLater(() -> {
-                        log("Download failed: " + filename + " - " + error);
-                        progressLabel.setText("Download failed!");
-                        showAlert("Download Failed", "Failed to download " + filename + ": " + error);
-                    });
-                }
-            });
+                    @Override
+                    public void onTransferFailed(String filename, String error) {
+                        Platform.runLater(() -> {
+                            log("Download failed: " + filename + " - " + error);
+                            progressLabel.setText("Download failed!");
+                            showAlert("Download Failed", "Failed to download " + filename + ": " + error);
+                        });
+                    }
+                });
     }
 
     /**
@@ -438,7 +450,127 @@ public class ClientUI extends Application {
                 }
             }
             log("File list updated: " + fileList.size() + " files available");
+        } else if (message.startsWith("NOTIFICATION:")) {
+            // Handle notifications from server (Member 5 - Notifier)
+            // Format: NOTIFICATION:[TYPE]MESSAGE|DETAILS
+            System.out.println("DEBUG: Received notification: " + message);
+            log("📢 Notification received from server");
+            handleNotification(message.substring(13)); // Remove "NOTIFICATION:" prefix
+        } else {
+            // Log any unhandled messages
+            System.out.println("DEBUG: Unhandled message: " + message);
         }
+    }
+
+    /**
+     * Handle and display notifications from server
+     * Shows popup notifications for various server events
+     */
+    private void handleNotification(String notificationData) {
+        try {
+            System.out.println("DEBUG: Parsing notification: " + notificationData);
+            // Parse notification: [TYPE]MESSAGE|DETAILS
+            int typeEnd = notificationData.indexOf(']');
+            if (typeEnd > 0) {
+                String type = notificationData.substring(1, typeEnd); // Remove [ and ]
+                String[] parts = notificationData.substring(typeEnd + 1).split("\\|");
+                String message = parts.length > 0 ? parts[0] : "";
+                String details = parts.length > 1 ? parts[1] : "";
+
+                System.out.println("DEBUG: Type=" + type + ", Message=" + message + ", Details=" + details);
+
+                // Log the notification
+                log("📢 Notification [" + type + "]: " + message);
+
+                // Show popup notification based on type
+                switch (type) {
+                    case "NEW_FILE":
+                        showNotificationAlert("New File Available! 📁",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        // Auto-refresh file list
+                        refreshFileList();
+                        break;
+
+                    case "FILE_UPDATED":
+                        showNotificationAlert("File Updated 📝",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        refreshFileList();
+                        break;
+
+                    case "FILE_DELETED":
+                        showNotificationAlert("File Deleted 🗑️",
+                                message + "\n" + details,
+                                Alert.AlertType.WARNING);
+                        refreshFileList();
+                        break;
+
+                    case "CLIENT_CONNECTED":
+                        showNotificationAlert("New Client Connected 👤",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    case "CLIENT_DISCONNECTED":
+                        showNotificationAlert("Client Disconnected 👋",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    case "SERVER_MESSAGE":
+                        showNotificationAlert("Server Message 📢",
+                                message,
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    default:
+                        showNotificationAlert("Notification",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                }
+            }
+        } catch (Exception e) {
+            log("Error parsing notification: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Show notification alert popup
+     */
+    private void showNotificationAlert(String title, String content, Alert.AlertType type) {
+        System.out.println("DEBUG: Showing alert - Title: " + title + ", Content: " + content);
+        Platform.runLater(() -> {
+            try {
+                Alert alert = new Alert(type);
+                alert.setTitle(title);
+                alert.setHeaderText(null);
+                alert.setContentText(content);
+
+                System.out.println("DEBUG: Alert created, showing now...");
+
+                // Auto-close after 5 seconds (optional)
+                // You can remove this if you want notifications to stay until user clicks OK
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(5000); // 5 seconds
+                        Platform.runLater(() -> {
+                            if (alert.isShowing()) {
+                                alert.close();
+                            }
+                        });
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }).start();
+
+                alert.show(); // Use show() instead of showAndWait() to not block
+                System.out.println("DEBUG: Alert.show() called!");
+            } catch (Exception e) {
+                System.err.println("ERROR showing alert: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
     }
 
     /**
@@ -446,7 +578,7 @@ public class ClientUI extends Application {
      */
     private void log(String message) {
         String timestamp = java.time.LocalTime.now().format(
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+                java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         logArea.appendText("[" + timestamp + "] " + message + "\n");
     }
 
@@ -465,9 +597,12 @@ public class ClientUI extends Application {
      * Format file size to human-readable format
      */
     private String formatFileSize(long size) {
-        if (size < 1024) return size + " B";
-        if (size < 1024 * 1024) return String.format("%.2f KB", size / 1024.0);
-        if (size < 1024 * 1024 * 1024) return String.format("%.2f MB", size / (1024.0 * 1024));
+        if (size < 1024)
+            return size + " B";
+        if (size < 1024 * 1024)
+            return String.format("%.2f KB", size / 1024.0);
+        if (size < 1024 * 1024 * 1024)
+            return String.format("%.2f MB", size / (1024.0 * 1024));
         return String.format("%.2f GB", size / (1024.0 * 1024 * 1024));
     }
 
@@ -488,16 +623,187 @@ public class ClientUI extends Application {
         }
 
         private String formatSize(long size) {
-            if (size < 1024) return size + " B";
-            if (size < 1024 * 1024) return String.format("%.2f KB", size / 1024.0);
-            if (size < 1024 * 1024 * 1024) return String.format("%.2f MB", size / (1024.0 * 1024));
+            if (size < 1024)
+                return size + " B";
+            if (size < 1024 * 1024)
+                return String.format("%.2f KB", size / 1024.0);
+            if (size < 1024 * 1024 * 1024)
+                return String.format("%.2f MB", size / (1024.0 * 1024));
             return String.format("%.2f GB", size / (1024.0 * 1024 * 1024));
         }
 
-        public String getName() { return name; }
-        public String getSize() { return size; }
-        public long getSizeBytes() { return sizeBytes; }
-        public String getDateModified() { return dateModified; }
+        public String getName() {
+            return name;
+        }
+
+        public String getSize() {
+            return size;
+        }
+
+        public long getSizeBytes() {
+            return sizeBytes;
+        }
+
+        public String getDateModified() {
+            return dateModified;
+        }
+    }
+
+    // ==================== Member 5: UDP Broadcast Listener ====================
+
+    /**
+     * Start UDP listener to receive broadcast notifications from Member 5 (Notifier)
+     * Demonstrates UDP broadcasting concept
+     */
+    private void startUDPListener() {
+        listeningForBroadcasts = true;
+
+        udpListenerThread = new Thread(() -> {
+            java.net.DatagramSocket udpSocket = null;
+
+            try {
+                // Create UDP socket to listen on port 9876
+                udpSocket = new java.net.DatagramSocket(UDP_PORT);
+                udpSocket.setSoTimeout(1000); // 1 second timeout
+
+                log("📻 UDP Broadcast listener started on port " + UDP_PORT);
+                System.out.println("[ClientUI] UDP broadcast listener started on port " + UDP_PORT);
+
+                byte[] buffer = new byte[1024];
+
+                while (listeningForBroadcasts) {
+                    try {
+                        java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
+                        udpSocket.receive(packet);
+
+                        String message = new String(packet.getData(), 0, packet.getLength());
+                        System.out.println("[ClientUI] UDP broadcast received: " + message);
+
+                        // Parse broadcast: [TYPE] Message | Details
+                        handleUDPBroadcast(message);
+
+                    } catch (java.net.SocketTimeoutException e) {
+                        // Timeout is normal, continue listening
+                    }
+                }
+
+            } catch (java.net.SocketException e) {
+                if (listeningForBroadcasts) {
+                    System.err.println("[ClientUI] UDP socket error: " + e.getMessage());
+                    Platform.runLater(() ->
+                            log("⚠️ UDP listener error: " + e.getMessage())
+                    );
+                }
+            } catch (java.io.IOException e) {
+                if (listeningForBroadcasts) {
+                    System.err.println("[ClientUI] UDP I/O error: " + e.getMessage());
+                }
+            } finally {
+                if (udpSocket != null && !udpSocket.isClosed()) {
+                    udpSocket.close();
+                }
+                System.out.println("[ClientUI] UDP broadcast listener stopped");
+            }
+        });
+
+        udpListenerThread.setName("UDP-Broadcast-Listener");
+        udpListenerThread.setDaemon(true);
+        udpListenerThread.start();
+    }
+
+    /**
+     * Stop UDP broadcast listener
+     */
+    private void stopUDPListener() {
+        listeningForBroadcasts = false;
+
+        if (udpListenerThread != null) {
+            try {
+                udpListenerThread.join(2000); // Wait up to 2 seconds
+            } catch (InterruptedException e) {
+                System.err.println("[ClientUI] Error stopping UDP listener: " + e.getMessage());
+            }
+        }
+
+        log("📻 UDP Broadcast listener stopped");
+    }
+
+    /**
+     * Handle UDP broadcast message from Member 5 (Notifier)
+     * Format: [TYPE] Message | Details
+     */
+    private void handleUDPBroadcast(String broadcast) {
+        try {
+            // Parse format: [TYPE] Message | Details
+            if (!broadcast.startsWith("[")) {
+                return;
+            }
+
+            int typeEnd = broadcast.indexOf("]");
+            if (typeEnd == -1) {
+                return;
+            }
+
+            String type = broadcast.substring(1, typeEnd).trim();
+            String rest = broadcast.substring(typeEnd + 1).trim();
+
+            String[] parts = rest.split("\\|");
+            String message = parts.length > 0 ? parts[0].trim() : "";
+            String details = parts.length > 1 ? parts[1].trim() : "";
+
+            System.out.println("[ClientUI] Parsed UDP - Type: " + type + ", Message: " + message + ", Details: " + details);
+
+            // Show notification popup based on type
+            Platform.runLater(() -> {
+                switch (type) {
+                    case "NEW_FILE":
+                        showNotificationAlert("📁 New File Available",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        refreshFileList();
+                        break;
+
+                    case "FILE_UPDATED":
+                        showNotificationAlert("📝 File Updated",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        refreshFileList();
+                        break;
+
+                    case "FILE_DELETED":
+                        showNotificationAlert("🗑️ File Deleted",
+                                message + "\n" + details,
+                                Alert.AlertType.WARNING);
+                        refreshFileList();
+                        break;
+
+                    case "CLIENT_CONNECTED":
+                        showNotificationAlert("👤 Client Connected",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    case "CLIENT_DISCONNECTED":
+                        showNotificationAlert("👋 Client Disconnected",
+                                message + "\n" + details,
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    case "SERVER_MESSAGE":
+                        showNotificationAlert("📢 Server Message",
+                                message + (details.isEmpty() ? "" : "\n" + details),
+                                Alert.AlertType.INFORMATION);
+                        break;
+
+                    default:
+                        log("📻 Broadcast: " + message);
+                }
+            });
+
+        } catch (Exception e) {
+            System.err.println("[ClientUI] Error parsing UDP broadcast: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     public static void main(String[] args) {

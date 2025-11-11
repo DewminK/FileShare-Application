@@ -7,21 +7,7 @@ import java.nio.channels.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/**
- * Member 5 - Broadcaster / Notifier
- *
- * Implements a notification system that informs all connected clients in real-time
- * about new files or file updates. Ensures that every client stays updated with the
- * latest shared files.
- *
- * Networking Concepts Used:
- * - Java NIO (Channels, Buffers, Selectors) – Non-blocking I/O for multiple client notifications
- * - UDP Broadcasting (optional) – Sends quick update packets to all clients on the network
- * - Multithreading – Runs notification broadcasts on a separate thread
- * - HTTP Client Communication (optional) – Uses HttpURLConnection to send update requests
- *
- * @author Member 5 - Broadcaster / Notifier
- */
+
 public class Notifier {
 
     // NIO Selector for managing multiple notification channels
@@ -508,6 +494,18 @@ public class Notifier {
 
     public void notifyServerMessage(String message) {
         broadcastNotification(NotificationType.SERVER_MESSAGE, message, "");
+    }
+
+    public void notifyClientConnected(String clientAddress) {
+        broadcastNotification(NotificationType.CLIENT_CONNECTED,
+                "New client connected",
+                clientAddress);
+    }
+
+    public void notifyClientDisconnected(String clientAddress) {
+        broadcastNotification(NotificationType.CLIENT_DISCONNECTED,
+                "Client disconnected",
+                clientAddress);
     }
 
     // ==================== Helper Classes ====================

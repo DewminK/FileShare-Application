@@ -6,18 +6,6 @@ import java.net.Socket;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-/**
- * Enhanced Server with Notifier Integration
- * Demonstrates how to integrate all 5 team member components
- *
- * This is an enhanced version of ServerMain that includes:
- * - Member 1: TCP Server with multithreading
- * - Member 3: FileHandler for NIO operations
- * - Member 4: SynchronizedFileAccess for thread-safe operations
- * - Member 5: Notifier for real-time client notifications
- *
- * @author Integration Example - All Members
- */
 public class ServerWithNotifier {
 
     private ServerSocket serverSocket;
