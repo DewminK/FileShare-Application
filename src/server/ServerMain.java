@@ -6,12 +6,13 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import server.Notifier;
 
 /**
  * Member 1 - Server Developer
  * TCP Server for File Sharing Application
  * Handles multiple client connections concurrently using multithreading
- * 
+ *
  * Networking Concepts Used:
  * - ServerSocket for TCP server
  * - Socket for client communication
@@ -25,6 +26,7 @@ public class ServerMain {
     private List<ClientHandler> connectedClients;
     private List<ServerListener> listeners;
     private String sharedDirectory;
+    private Notifier notifier; // Member 5: Broadcaster/Notifier
 
     public ServerMain(int port, String sharedDirectory) {
         this.port = port;
@@ -32,13 +34,18 @@ public class ServerMain {
         this.running = false;
         this.connectedClients = new CopyOnWriteArrayList<>();
         this.listeners = new ArrayList<>();
-        
+
         // Create shared directory if it doesn't exist
         File dir = new File(sharedDirectory);
         if (!dir.exists()) {
             dir.mkdirs();
             System.out.println("[Server] Created shared directory: " + sharedDirectory);
         }
+
+        // Initialize Member 5: Broadcaster/Notifier
+        // Using UDP broadcasting on port 9876
+        this.notifier = new Notifier(true, 9876);
+        System.out.println("[Server] Notifier initialized (UDP port 9876)");
     }
 
     /**
@@ -48,10 +55,18 @@ public class ServerMain {
         try {
             serverSocket = new ServerSocket(port);
             running = true;
+
+            // Start Member 5: Notifier
+            notifier.start();
+            System.out.println("[Server] Notifier service started");
+
             notifyServerStarted();
             System.out.println("[Server] Started on port " + port);
             System.out.println("[Server] Shared directory: " + sharedDirectory);
-            
+
+            // Broadcast server started message
+            notifier.notifyServerMessage("File Sharing Server started on port " + port);
+
             // Accept client connections in a separate thread
             Thread acceptThread = new Thread(new Runnable() {
                 @Override
@@ -60,7 +75,7 @@ public class ServerMain {
                 }
             });
             acceptThread.start();
-            
+
         } catch (IOException e) {
             System.err.println("[Server] Failed to start: " + e.getMessage());
             notifyServerError("Failed to start server: " + e.getMessage());
@@ -76,17 +91,29 @@ public class ServerMain {
                 Socket clientSocket = serverSocket.accept();
                 String clientAddress = clientSocket.getInetAddress().getHostAddress();
                 System.out.println("[Server] New client connected: " + clientAddress);
-                
+
                 // Create a handler for this client
                 ClientHandler handler = new ClientHandler(clientSocket, this);
                 connectedClients.add(handler);
-                
+
                 // Start handler thread
                 Thread handlerThread = new Thread(handler);
                 handlerThread.start();
-                
+
                 notifyClientConnected(clientAddress);
-                
+
+                // Broadcast client connection via Member 5: Notifier
+                notifier.notifyClientConnected(clientAddress);
+
+                // Also broadcast to all connected clients via TCP
+                broadcastToClients("CLIENT_CONNECTED", "New client connected", clientAddress);
+
+                // Update user list for all clients
+                broadcastUserList();
+
+                // Notify new client they joined chat
+                handler.sendMessage("USER_JOINED:" + clientAddress);
+
             } catch (IOException e) {
                 if (running) {
                     System.err.println("[Server] Error accepting connection: " + e.getMessage());
@@ -100,13 +127,13 @@ public class ServerMain {
      */
     public void stop() {
         running = false;
-        
+
         // Close all client connections
         for (ClientHandler handler : connectedClients) {
             handler.disconnect();
         }
         connectedClients.clear();
-        
+
         // Close server socket
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {
@@ -115,7 +142,13 @@ public class ServerMain {
         } catch (IOException e) {
             System.err.println("[Server] Error closing server socket: " + e.getMessage());
         }
-        
+
+        // Stop Member 5: Notifier
+        if (notifier != null) {
+            notifier.stop();
+            System.out.println("[Server] Notifier service stopped");
+        }
+
         notifyServerStopped();
         System.out.println("[Server] Stopped");
     }
@@ -124,8 +157,25 @@ public class ServerMain {
      * Remove a client handler from the list
      */
     public void removeClient(ClientHandler handler) {
+        String clientAddr = handler.getClientAddress();
         connectedClients.remove(handler);
-        notifyClientDisconnected(handler.getClientAddress());
+        notifyClientDisconnected(clientAddr);
+
+        // Broadcast client disconnection via Member 5: Notifier
+        if (notifier != null) {
+            notifier.notifyClientDisconnected(clientAddr);
+        }
+
+        // Also broadcast to all connected clients via TCP
+        broadcastToClients("CLIENT_DISCONNECTED", "Client disconnected", clientAddr);
+
+        // Update user list for remaining clients
+        broadcastUserList();
+
+        // Notify all clients that user left chat
+        for (ClientHandler h : connectedClients) {
+            h.sendMessage("USER_LEFT:" + clientAddr);
+        }
     }
 
     public boolean isRunning() {
@@ -193,16 +243,72 @@ public class ServerMain {
         }
     }
 
+    public void notifyChatMessage(String sender, String message) {
+        for (ServerListener listener : listeners) {
+            if (listener instanceof ChatListener) {
+                ((ChatListener) listener).onChatMessage(sender, message);
+            }
+        }
+    }
+
+    /**
+     * Broadcast notification to all clients (TCP method)
+     */
+    public void broadcastToClients(String type, String message, String details) {
+        String notification = String.format("NOTIFICATION:[%s]%s|%s", type, message, details);
+        for (ClientHandler handler : connectedClients) {
+            handler.sendNotification(notification);
+        }
+        System.out.println("[Server] Broadcasted to " + connectedClients.size() + " clients: " + notification);
+    }
+
+    /**
+     * Broadcast chat message to all connected clients
+     */
+    public void broadcastChatMessage(String sender, String message) {
+        String chatMessage = "CHAT:" + sender + ":" + message;
+        for (ClientHandler handler : connectedClients) {
+            handler.sendMessage(chatMessage);
+        }
+        System.out.println("[Server] Chat broadcast from " + sender + ": " + message);
+    }
+
+    /**
+     * Send user list to all clients
+     */
+    private void broadcastUserList() {
+        StringBuilder userList = new StringBuilder("USER_LIST:");
+        for (ClientHandler handler : connectedClients) {
+            userList.append(handler.getClientAddress()).append("|");
+        }
+        String message = userList.toString();
+        for (ClientHandler handler : connectedClients) {
+            handler.sendMessage(message);
+        }
+    }
+
     /**
      * Listener interface for server events
      */
     public interface ServerListener {
         void onServerStarted(int port);
+
         void onServerStopped();
+
         void onClientConnected(String clientAddress);
+
         void onClientDisconnected(String clientAddress);
+
         void onFileTransfer(String clientAddress, String operation, String filename);
+
         void onServerError(String error);
+    }
+
+    /**
+     * Listener interface for chat messages
+     */
+    public interface ChatListener extends ServerListener {
+        void onChatMessage(String sender, String message);
     }
 
     /**
@@ -252,9 +358,23 @@ public class ServerMain {
                 handleUpload(command);
             } else if (command.startsWith("DOWNLOAD:")) {
                 handleDownload(command);
+            } else if (command.startsWith("CHAT:")) {
+                handleChatMessage(command);
             } else {
                 out.println("ERROR:Unknown command");
             }
+        }
+
+        private void handleChatMessage(String command) {
+            // Parse: CHAT:message
+            String message = command.substring(5);
+            System.out.println("[Server] Chat from " + clientAddress + ": " + message);
+
+            // Notify UI about chat message
+            server.notifyChatMessage(clientAddress, message);
+
+            // Broadcast to all clients
+            server.broadcastChatMessage(clientAddress, message);
         }
 
         private void handleListFiles() {
@@ -306,8 +426,8 @@ public class ServerMain {
 
                 // Read file data directly from socket
                 while (totalBytesReceived < fileSize &&
-                       (bytesRead = inputStream.read(buffer, 0,
-                           (int) Math.min(buffer.length, fileSize - totalBytesReceived))) != -1) {
+                        (bytesRead = inputStream.read(buffer, 0,
+                                (int) Math.min(buffer.length, fileSize - totalBytesReceived))) != -1) {
                     bos.write(buffer, 0, bytesRead);
                     totalBytesReceived += bytesRead;
                 }
@@ -317,6 +437,12 @@ public class ServerMain {
 
                 System.out.println("[Server] Upload completed: " + filename + " (" + totalBytesReceived + " bytes)");
                 out.println("UPLOAD_SUCCESS:File uploaded successfully");
+
+                // Broadcast new file notification via Member 5: Notifier
+                server.notifier.notifyNewFile(filename, clientAddress);
+
+                // Also broadcast to all connected clients via TCP
+                server.broadcastToClients("NEW_FILE", clientAddress + " uploaded", filename);
 
             } catch (IOException e) {
                 System.err.println("[Server] Error receiving file: " + e.getMessage());
@@ -343,9 +469,12 @@ public class ServerMain {
 
         public void disconnect() {
             try {
-                if (out != null) out.close();
-                if (in != null) in.close();
-                if (socket != null && !socket.isClosed()) socket.close();
+                if (out != null)
+                    out.close();
+                if (in != null)
+                    in.close();
+                if (socket != null && !socket.isClosed())
+                    socket.close();
             } catch (IOException e) {
                 System.err.println("[Server] Error closing client connection: " + e.getMessage());
             }
@@ -360,13 +489,31 @@ public class ServerMain {
         public long getConnectionTime() {
             return (System.currentTimeMillis() - connectionStartTime) / 1000;
         }
+
+        /**
+         * Send notification to this client
+         */
+        public void sendNotification(String notification) {
+            if (out != null) {
+                out.println(notification);
+            }
+        }
+
+        /**
+         * Send message to this client
+         */
+        public void sendMessage(String message) {
+            if (out != null) {
+                out.println(message);
+            }
+        }
     }
 
     /**
      * Simple test main method
      */
     public static void main(String[] args) {
-        ServerMain server = new ServerMain(8080, "./shared_files");
+        ServerMain server = new ServerMain(9090, "./shared_files");
         server.start();
 
         // Keep running
