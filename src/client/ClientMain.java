@@ -116,14 +116,24 @@ public class ClientMain {
     }
 
     /**
+     * Send chat message to server
+     */
+    public void sendChatMessage(String message) {
+        sendCommand("CHAT:" + message);
+    }
+
+    /**
      * Step 5: Close the connection and free up system resources
      */
     public void disconnect() {
         try {
             connected = false;
-            if (out != null) out.close();
-            if (in != null) in.close();
-            if (socket != null) socket.close();
+            if (out != null)
+                out.close();
+            if (in != null)
+                in.close();
+            if (socket != null)
+                socket.close();
             System.out.println("Disconnected from server");
             notifyConnectionStatus(false);
         } catch (IOException e) {
@@ -158,6 +168,7 @@ public class ClientMain {
 
     public interface ConnectionListener {
         void onConnectionStatusChanged(boolean connected);
+
         void onMessageReceived(String message);
     }
 
@@ -166,7 +177,7 @@ public class ClientMain {
      */
     public static void main(String[] args) {
         // Example usage
-        ClientMain client = new ClientMain("localhost", 8080);
+        ClientMain client = new ClientMain("localhost", 9090);
 
         if (client.connect()) {
             // Send a test message
@@ -187,4 +198,3 @@ public class ClientMain {
         }
     }
 }
-

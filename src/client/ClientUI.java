@@ -14,6 +14,13 @@ import javafx.collections.ObservableList;
 import javafx.scene.control.cell.PropertyValueFactory;
 
 import java.io.File;
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 
 /**
  * JavaFX-based User Interface for File Sharing Client
@@ -24,7 +31,6 @@ public class ClientUI extends Application {
 
     private ClientMain client;
     private FileTransferHandler fileHandler;
-
 
     // Member 5: UDP Broadcast Listener
     private Thread udpListenerThread;
@@ -49,6 +55,13 @@ public class ClientUI extends Application {
     private Button downloadButton;
     private Button refreshButton;
 
+    // Chat components
+    private TextArea chatArea;
+    private TextField chatInputField;
+    private Button chatSendButton;
+    private ListView<String> onlineUsersList;
+    private ObservableList<String> onlineUsers;
+
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("File Sharing Client - Network Programming");
@@ -61,8 +74,8 @@ public class ClientUI extends Application {
         VBox topPanel = createConnectionPanel();
         mainLayout.setTop(topPanel);
 
-        // Center: File List and Operations
-        VBox centerPanel = createFilePanel();
+        // Center: Split view - Files on left, Chat on right
+        SplitPane centerPanel = createMainSplitPanel();
         mainLayout.setCenter(centerPanel);
 
         // Bottom: Log and Progress
@@ -99,7 +112,120 @@ public class ClientUI extends Application {
     }
 
     /**
-     * Create connection panel with server address, port, and connect/disconnect
+     * Create main split panel with files on left and chat on right
+     */
+    private SplitPane createMainSplitPanel() {
+        SplitPane splitPane = new SplitPane();
+        splitPane.setDividerPositions(0.6); // 60% for files, 40% for chat
+
+        // Left: File Panel
+        VBox filePanel = createFilePanel();
+
+        // Right: Chat Panel
+        VBox chatPanel = createChatPanel();
+
+        splitPane.getItems().addAll(filePanel, chatPanel);
+        return splitPane;
+    }
+
+    /**
+     * Create chat panel with messages and online users
+     */
+    private VBox createChatPanel() {
+        VBox panel = new VBox(10);
+        panel.setPadding(new Insets(10));
+        VBox.setVgrow(panel, Priority.ALWAYS);
+
+        Label titleLabel = new Label("💬 Chat Room");
+        titleLabel.setStyle("-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #2196F3;");
+
+        // Split for chat area and online users
+        SplitPane chatSplit = new SplitPane();
+        chatSplit.setDividerPositions(0.7);
+        VBox.setVgrow(chatSplit, Priority.ALWAYS);
+
+        // Chat messages area
+        VBox chatMessagesBox = new VBox(5);
+        Label chatLabel = new Label("Messages");
+        chatLabel.setStyle("-fx-font-weight: bold;");
+
+        chatArea = new TextArea();
+        chatArea.setEditable(false);
+        chatArea.setWrapText(true);
+        chatArea.setStyle("-fx-control-inner-background: #f5f5f5; -fx-font-family: 'Segoe UI';");
+        VBox.setVgrow(chatArea, Priority.ALWAYS);
+
+        chatMessagesBox.getChildren().addAll(chatLabel, chatArea);
+
+        // Online users panel
+        VBox usersBox = new VBox(5);
+        Label usersLabel = new Label("👥 Online");
+        usersLabel.setStyle("-fx-font-weight: bold;");
+
+        onlineUsers = FXCollections.observableArrayList();
+        onlineUsersList = new ListView<>(onlineUsers);
+        onlineUsersList.setStyle("-fx-control-inner-background: #e3f2fd;");
+        VBox.setVgrow(onlineUsersList, Priority.ALWAYS);
+
+        usersBox.getChildren().addAll(usersLabel, onlineUsersList);
+
+        chatSplit.getItems().addAll(chatMessagesBox, usersBox);
+
+        // Chat input area
+        HBox chatInputBox = new HBox(10);
+        chatInputBox.setAlignment(Pos.CENTER);
+
+        chatInputField = new TextField();
+        chatInputField.setPromptText("Type your message...");
+        chatInputField.setDisable(true);
+        HBox.setHgrow(chatInputField, Priority.ALWAYS);
+        chatInputField.setOnAction(e -> sendChatMessage());
+
+        chatSendButton = new Button("Send");
+        chatSendButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 8 20;");
+        chatSendButton.setDisable(true);
+        chatSendButton.setOnAction(e -> sendChatMessage());
+
+        chatInputBox.getChildren().addAll(chatInputField, chatSendButton);
+
+        panel.getChildren().addAll(titleLabel, chatSplit, chatInputBox);
+        return panel;
+    }
+
+    /**
+     * Send chat message to server
+     */
+    private void sendChatMessage() {
+        String message = chatInputField.getText().trim();
+        if (message.isEmpty() || client == null || !client.isConnected()) {
+            return;
+        }
+
+        try {
+            // Send chat message to server
+            client.sendChatMessage(message);
+
+            // Display in local chat
+            appendChatMessage("You", message);
+            chatInputField.clear();
+        } catch (Exception e) {
+            log("Error sending chat message: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Append chat message to chat area
+     */
+    private void appendChatMessage(String sender, String message) {
+        Platform.runLater(() -> {
+            String timestamp = java.time.LocalTime.now().format(
+                    java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+            chatArea.appendText(String.format("[%s] %s: %s\n", timestamp, sender, message));
+        });
+    }
+
+    /**
+     * Connection panel with server address, port, and connect/disconnect
      * buttons
      */
     private VBox createConnectionPanel() {
@@ -192,7 +318,17 @@ public class ClientUI extends Application {
         refreshButton.setDisable(true);
         refreshButton.setOnAction(e -> refreshFileList());
 
-        buttonBox.getChildren().addAll(uploadButton, downloadButton, refreshButton);
+        // Test notification button (for debugging)
+        Button testNotifButton = new Button("🔔 Test Notification");
+        testNotifButton.setStyle("-fx-background-color: #FF5722; -fx-text-fill: white; -fx-font-weight: bold;");
+        testNotifButton.setOnAction(e -> {
+            showNotificationAlert("Test Notification 🔔",
+                    "This is a test notification to verify the system is working!\nTimestamp: " +
+                            java.time.LocalTime.now(),
+                    Alert.AlertType.INFORMATION);
+        });
+
+        buttonBox.getChildren().addAll(uploadButton, downloadButton, refreshButton, testNotifButton);
 
         panel.getChildren().addAll(titleLabel, fileTable, buttonBox);
         return panel;
@@ -306,6 +442,12 @@ public class ClientUI extends Application {
             uploadButton.setDisable(false);
             downloadButton.setDisable(false);
             refreshButton.setDisable(false);
+
+            // Enable chat components
+            chatInputField.setDisable(false);
+            chatSendButton.setDisable(false);
+            appendChatMessage("System", "Connected to chat room!");
+
         } else {
             statusLabel.setText("Status: Not Connected");
             statusLabel.setStyle("-fx-font-weight: bold; -fx-text-fill: #ff0000;");
@@ -316,6 +458,12 @@ public class ClientUI extends Application {
             uploadButton.setDisable(true);
             downloadButton.setDisable(true);
             refreshButton.setDisable(true);
+
+            // Disable chat components
+            chatInputField.setDisable(true);
+            chatSendButton.setDisable(true);
+            chatArea.clear();
+            onlineUsers.clear();
         }
     }
 
@@ -456,6 +604,35 @@ public class ClientUI extends Application {
             System.out.println("DEBUG: Received notification: " + message);
             log("📢 Notification received from server");
             handleNotification(message.substring(13)); // Remove "NOTIFICATION:" prefix
+        } else if (message.startsWith("CHAT:")) {
+            // Handle chat messages: CHAT:username:message
+            String chatContent = message.substring(5);
+            int separatorIndex = chatContent.indexOf(":");
+            if (separatorIndex > 0) {
+                String username = chatContent.substring(0, separatorIndex);
+                String chatMsg = chatContent.substring(separatorIndex + 1);
+                appendChatMessage(username, chatMsg);
+            }
+        } else if (message.startsWith("USER_LIST:")) {
+            // Handle online users list: USER_LIST:user1|user2|user3
+            String userListStr = message.substring(10);
+            onlineUsers.clear();
+            if (!userListStr.isEmpty()) {
+                String[] users = userListStr.split("\\|");
+                onlineUsers.addAll(users);
+            }
+        } else if (message.startsWith("USER_JOINED:")) {
+            // User joined: USER_JOINED:username
+            String username = message.substring(12);
+            if (!onlineUsers.contains(username)) {
+                onlineUsers.add(username);
+            }
+            appendChatMessage("System", username + " joined the chat");
+        } else if (message.startsWith("USER_LEFT:")) {
+            // User left: USER_LEFT:username
+            String username = message.substring(10);
+            onlineUsers.remove(username);
+            appendChatMessage("System", username + " left the chat");
         } else {
             // Log any unhandled messages
             System.out.println("DEBUG: Unhandled message: " + message);
@@ -547,28 +724,40 @@ public class ClientUI extends Application {
                 alert.setHeaderText(null);
                 alert.setContentText(content);
 
+                // Make alert more visible
+                alert.setResizable(true);
+                alert.getDialogPane().setMinWidth(400);
+
                 System.out.println("DEBUG: Alert created, showing now...");
 
-                // Auto-close after 5 seconds (optional)
-                // You can remove this if you want notifications to stay until user clicks OK
-                new Thread(() -> {
+                // Auto-close after 15 seconds (increased from 5)
+                // Comment this out if you want notifications to stay until user clicks OK
+                Thread autoCloseThread = new Thread(() -> {
                     try {
-                        Thread.sleep(5000); // 5 seconds
+                        Thread.sleep(15000); // 15 seconds (increased for visibility)
                         Platform.runLater(() -> {
                             if (alert.isShowing()) {
+                                System.out.println("DEBUG: Auto-closing notification alert");
                                 alert.close();
                             }
                         });
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
-                }).start();
+                });
+                autoCloseThread.setDaemon(true);
+                autoCloseThread.start();
 
                 alert.show(); // Use show() instead of showAndWait() to not block
                 System.out.println("DEBUG: Alert.show() called!");
+
+                // Also log to activity log as backup
+                log("📢 NOTIFICATION: " + title + " - " + content);
             } catch (Exception e) {
                 System.err.println("ERROR showing alert: " + e.getMessage());
                 e.printStackTrace();
+                // Fallback: at least log it
+                log("⚠️ Notification (popup failed): " + title + " - " + content);
             }
         });
     }
@@ -652,18 +841,19 @@ public class ClientUI extends Application {
     // ==================== Member 5: UDP Broadcast Listener ====================
 
     /**
-     * Start UDP listener to receive broadcast notifications from Member 5 (Notifier)
+     * Start UDP listener to receive broadcast notifications from Member 5
+     * (Notifier)
      * Demonstrates UDP broadcasting concept
      */
     private void startUDPListener() {
         listeningForBroadcasts = true;
 
         udpListenerThread = new Thread(() -> {
-            java.net.DatagramSocket udpSocket = null;
+            DatagramSocket udpSocket = null;
 
             try {
                 // Create UDP socket to listen on port 9876
-                udpSocket = new java.net.DatagramSocket(UDP_PORT);
+                udpSocket = new DatagramSocket(UDP_PORT);
                 udpSocket.setSoTimeout(1000); // 1 second timeout
 
                 log("📻 UDP Broadcast listener started on port " + UDP_PORT);
@@ -673,7 +863,7 @@ public class ClientUI extends Application {
 
                 while (listeningForBroadcasts) {
                     try {
-                        java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                         udpSocket.receive(packet);
 
                         String message = new String(packet.getData(), 0, packet.getLength());
@@ -682,19 +872,17 @@ public class ClientUI extends Application {
                         // Parse broadcast: [TYPE] Message | Details
                         handleUDPBroadcast(message);
 
-                    } catch (java.net.SocketTimeoutException e) {
+                    } catch (SocketTimeoutException e) {
                         // Timeout is normal, continue listening
                     }
                 }
 
-            } catch (java.net.SocketException e) {
+            } catch (SocketException e) {
                 if (listeningForBroadcasts) {
                     System.err.println("[ClientUI] UDP socket error: " + e.getMessage());
-                    Platform.runLater(() ->
-                            log("⚠️ UDP listener error: " + e.getMessage())
-                    );
+                    Platform.runLater(() -> log("⚠️ UDP listener error: " + e.getMessage()));
                 }
-            } catch (java.io.IOException e) {
+            } catch (IOException e) {
                 if (listeningForBroadcasts) {
                     System.err.println("[ClientUI] UDP I/O error: " + e.getMessage());
                 }
@@ -751,7 +939,8 @@ public class ClientUI extends Application {
             String message = parts.length > 0 ? parts[0].trim() : "";
             String details = parts.length > 1 ? parts[1].trim() : "";
 
-            System.out.println("[ClientUI] Parsed UDP - Type: " + type + ", Message: " + message + ", Details: " + details);
+            System.out.println(
+                    "[ClientUI] Parsed UDP - Type: " + type + ", Message: " + message + ", Details: " + details);
 
             // Show notification popup based on type
             Platform.runLater(() -> {

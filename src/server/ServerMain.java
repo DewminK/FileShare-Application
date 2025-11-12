@@ -6,7 +6,19 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import server.Notifier;
 
+/**
+ * Member 1 - Server Developer
+ * TCP Server for File Sharing Application
+ * Handles multiple client connections concurrently using multithreading
+ *
+ * Networking Concepts Used:
+ * - ServerSocket for TCP server
+ * - Socket for client communication
+ * - Multithreading - spawns thread for each client
+ * - I/O Streams for data transfer
+ */
 public class ServerMain {
     private ServerSocket serverSocket;
     private boolean running;
@@ -96,6 +108,12 @@ public class ServerMain {
                 // Also broadcast to all connected clients via TCP
                 broadcastToClients("CLIENT_CONNECTED", "New client connected", clientAddress);
 
+                // Update user list for all clients
+                broadcastUserList();
+
+                // Notify new client they joined chat
+                handler.sendMessage("USER_JOINED:" + clientAddress);
+
             } catch (IOException e) {
                 if (running) {
                     System.err.println("[Server] Error accepting connection: " + e.getMessage());
@@ -139,16 +157,25 @@ public class ServerMain {
      * Remove a client handler from the list
      */
     public void removeClient(ClientHandler handler) {
+        String clientAddr = handler.getClientAddress();
         connectedClients.remove(handler);
-        notifyClientDisconnected(handler.getClientAddress());
+        notifyClientDisconnected(clientAddr);
 
         // Broadcast client disconnection via Member 5: Notifier
         if (notifier != null) {
-            notifier.notifyClientDisconnected(handler.getClientAddress());
+            notifier.notifyClientDisconnected(clientAddr);
         }
 
         // Also broadcast to all connected clients via TCP
-        broadcastToClients("CLIENT_DISCONNECTED", "Client disconnected", handler.getClientAddress());
+        broadcastToClients("CLIENT_DISCONNECTED", "Client disconnected", clientAddr);
+
+        // Update user list for remaining clients
+        broadcastUserList();
+
+        // Notify all clients that user left chat
+        for (ClientHandler h : connectedClients) {
+            h.sendMessage("USER_LEFT:" + clientAddr);
+        }
     }
 
     public boolean isRunning() {
@@ -216,8 +243,16 @@ public class ServerMain {
         }
     }
 
+    public void notifyChatMessage(String sender, String message) {
+        for (ServerListener listener : listeners) {
+            if (listener instanceof ChatListener) {
+                ((ChatListener) listener).onChatMessage(sender, message);
+            }
+        }
+    }
+
     /**
-     * Broadcast notification to all connected clients
+     * Broadcast notification to all clients (TCP method)
      */
     public void broadcastToClients(String type, String message, String details) {
         String notification = String.format("NOTIFICATION:[%s]%s|%s", type, message, details);
@@ -225,6 +260,31 @@ public class ServerMain {
             handler.sendNotification(notification);
         }
         System.out.println("[Server] Broadcasted to " + connectedClients.size() + " clients: " + notification);
+    }
+
+    /**
+     * Broadcast chat message to all connected clients
+     */
+    public void broadcastChatMessage(String sender, String message) {
+        String chatMessage = "CHAT:" + sender + ":" + message;
+        for (ClientHandler handler : connectedClients) {
+            handler.sendMessage(chatMessage);
+        }
+        System.out.println("[Server] Chat broadcast from " + sender + ": " + message);
+    }
+
+    /**
+     * Send user list to all clients
+     */
+    private void broadcastUserList() {
+        StringBuilder userList = new StringBuilder("USER_LIST:");
+        for (ClientHandler handler : connectedClients) {
+            userList.append(handler.getClientAddress()).append("|");
+        }
+        String message = userList.toString();
+        for (ClientHandler handler : connectedClients) {
+            handler.sendMessage(message);
+        }
     }
 
     /**
@@ -242,6 +302,13 @@ public class ServerMain {
         void onFileTransfer(String clientAddress, String operation, String filename);
 
         void onServerError(String error);
+    }
+
+    /**
+     * Listener interface for chat messages
+     */
+    public interface ChatListener extends ServerListener {
+        void onChatMessage(String sender, String message);
     }
 
     /**
@@ -291,9 +358,23 @@ public class ServerMain {
                 handleUpload(command);
             } else if (command.startsWith("DOWNLOAD:")) {
                 handleDownload(command);
+            } else if (command.startsWith("CHAT:")) {
+                handleChatMessage(command);
             } else {
                 out.println("ERROR:Unknown command");
             }
+        }
+
+        private void handleChatMessage(String command) {
+            // Parse: CHAT:message
+            String message = command.substring(5);
+            System.out.println("[Server] Chat from " + clientAddress + ": " + message);
+
+            // Notify UI about chat message
+            server.notifyChatMessage(clientAddress, message);
+
+            // Broadcast to all clients
+            server.broadcastChatMessage(clientAddress, message);
         }
 
         private void handleListFiles() {
@@ -415,6 +496,15 @@ public class ServerMain {
         public void sendNotification(String notification) {
             if (out != null) {
                 out.println(notification);
+            }
+        }
+
+        /**
+         * Send message to this client
+         */
+        public void sendMessage(String message) {
+            if (out != null) {
+                out.println(message);
             }
         }
     }
