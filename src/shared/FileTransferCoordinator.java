@@ -4,28 +4,18 @@ import java.io.*;
 import java.util.concurrent.*;
 
 /**
- 
- * High-level wrapper for coordinating file transfers with synchronization.
- * This class bridges the gap between the Client/Server components and the
- * SynchronizedFileAccess handler.
- * 
- *
- * @author Synchronization Handler
+ This component manages and coordinates file transfers safely across threads.
+ It connects the client/server with the low-level file access system, while also handling timeouts, errors, and monitoring operations.
  */
 public class FileTransferCoordinator {
     
     private final SynchronizedFileAccess syncHandler;
     private final String sharedDirectory;
     
-    /**
-     * Constructor
-     * @param sharedDirectory Directory where shared files are stored
-     */
     public FileTransferCoordinator(String sharedDirectory) {
         this.syncHandler = new SynchronizedFileAccess();
         this.sharedDirectory = sharedDirectory;
         
-        // Ensure shared directory exists
         File dir = new File(sharedDirectory);
         if (!dir.exists()) {
             dir.mkdirs();
@@ -36,13 +26,9 @@ public class FileTransferCoordinator {
     }
     
     /**
-     * Handle file upload from client (Server-side usage)
-     * This method ensures thread-safe writing when multiple clients upload
-     * 
-     * @param filename Name of the file being uploaded
-     * @param inputStream Stream containing file data from client
-     * @param fileSize Size of the file in bytes
-     * @return TransferResult containing success status and details
+     * Handle file UPLOAD from client (Server-side).
+     * Uses synchronized write to prevent data corruption when multiple clients upload simultaneously.
+     * Implements 30-second timeout to prevent indefinite blocking.
      */
     public TransferResult handleUpload(String filename, InputStream inputStream, long fileSize) {
         System.out.println("[Coordinator] Handling upload request for: " + filename 
@@ -50,19 +36,15 @@ public class FileTransferCoordinator {
         
         String filePath = getFilePath(filename);
         
-        // Check if file is already being written by another client
         if (syncHandler.isFileInUse(filePath)) {
             System.out.println("[Coordinator] File is currently in use: " + filename 
                               + " (Active operations: " + syncHandler.getActiveOperations(filePath) + ")");
-            // Still proceed, but log the concurrent access
         }
         
         try {
-            // Use synchronized write operation
             Future<Boolean> future = syncHandler.synchronizedFileWrite(filePath, inputStream, fileSize);
             
-            // Wait for the operation to complete
-            Boolean success = future.get(30, TimeUnit.SECONDS); // 30 second timeout
+            Boolean success = future.get(30, TimeUnit.SECONDS);
             
             if (success) {
                 System.out.println("[Coordinator] Upload successful: " + filename);
@@ -87,37 +69,30 @@ public class FileTransferCoordinator {
     }
     
     /**
-     * Handle file download request (Server-side usage)
-     * This method ensures thread-safe reading when multiple clients download the same file
-     * 
-     * @param filename Name of the file being downloaded
-     * @param outputStream Stream to send file data to client
-     * @return TransferResult containing success status and details
+     * Handle file DOWNLOAD request (Server-side).
+     * Ensures thread-safe reading when multiple clients download the same file.
+     * Multiple simultaneous downloads are allowed (shared read lock).
      */
     public TransferResult handleDownload(String filename, OutputStream outputStream) {
         System.out.println("[Coordinator] Handling download request for: " + filename);
         
         String filePath = getFilePath(filename);
         
-        // Check if file exists
         File file = new File(filePath);
         if (!file.exists()) {
             System.err.println("[Coordinator] File not found: " + filename);
             return new TransferResult(false, "File not found", filePath);
         }
         
-        // Log concurrent access
         if (syncHandler.isFileInUse(filePath)) {
             System.out.println("[Coordinator] File is being accessed concurrently: " + filename 
                               + " (Active operations: " + syncHandler.getActiveOperations(filePath) + ")");
         }
         
         try {
-            // Use synchronized read operation (allows multiple concurrent reads)
             Future<Boolean> future = syncHandler.synchronizedFileRead(filePath, outputStream);
             
-            // Wait for the operation to complete
-            Boolean success = future.get(30, TimeUnit.SECONDS); // 30 second timeout
+            Boolean success = future.get(30, TimeUnit.SECONDS);
             
             if (success) {
                 System.out.println("[Coordinator] Download successful: " + filename);
@@ -142,10 +117,7 @@ public class FileTransferCoordinator {
     }
     
     /**
-     * Check if a file can be safely deleted (no active operations)
-     * 
-     * @param filename Name of the file to check
-     * @return true if file can be safely deleted
+     * Check if a file can be safely deleted (no active operations).
      */
     public boolean canDeleteFile(String filename) {
         String filePath = getFilePath(filename);
@@ -160,12 +132,8 @@ public class FileTransferCoordinator {
     }
     
     /**
-     * Wait for all operations on a file to complete before performing action
-     * Useful for file deletion, moving, or renaming
-     * 
-     * @param filename Name of the file
-     * @param timeoutMs Maximum time to wait in milliseconds
-     * @return true if all operations completed within timeout
+     * Wait for all operations on a file to complete before performing action.
+     * Useful for file deletion, moving, or renaming.
      */
     public boolean waitForFileAvailability(String filename, long timeoutMs) {
         String filePath = getFilePath(filename);
@@ -173,26 +141,17 @@ public class FileTransferCoordinator {
         return syncHandler.waitForFileOperations(filePath, timeoutMs);
     }
     
-    /**
-     * Get current statistics about file operations
-     * Useful for monitoring and debugging
-     * 
-     * @return Map containing statistics
-     */
     public java.util.Map<String, Object> getStatistics() {
         return syncHandler.getStatistics();
     }
     
-    /**
-     * Get full file path in shared directory
-     */
     private String getFilePath(String filename) {
         return new File(sharedDirectory, filename).getPath();
     }
     
     /**
-     * Shutdown the coordinator gracefully
-     * Should be called when server is shutting down
+     * Shutdown the coordinator gracefully.
+     * Should be called when server is shutting down.
      */
     public void shutdown() {
         System.out.println("[Coordinator] Shutting down File Transfer Coordinator...");
@@ -236,26 +195,23 @@ public class FileTransferCoordinator {
         }
     }
     
-    /**
-     * Demo/Test method
-     */
+    // Demo: Tests upload and concurrent downloads with statistics
     public static void main(String[] args) throws Exception {
         System.out.println("=== File Transfer Coordinator Demo ===\n");
         
         FileTransferCoordinator coordinator = new FileTransferCoordinator("./shared_files");
         
-        // Create test file
         String testFile = "demo_file.txt";
         String testContent = "This is a test file for demonstrating coordinated file transfers.\n";
         
-        // Simulate upload
+        // Test 1: Simulate upload
         System.out.println("1. Simulating file upload...");
         ByteArrayInputStream uploadStream = new ByteArrayInputStream(testContent.getBytes());
         TransferResult uploadResult = coordinator.handleUpload(testFile, uploadStream, 
                                                                testContent.getBytes().length);
         System.out.println("Upload result: " + uploadResult + "\n");
         
-        // Simulate multiple concurrent downloads
+        // Test 2: Simulate multiple concurrent downloads
         System.out.println("2. Simulating concurrent downloads...");
         for (int i = 0; i < 3; i++) {
             final int num = i + 1;
@@ -270,19 +226,17 @@ public class FileTransferCoordinator {
             }).start();
         }
         
-        // Wait a bit for downloads to complete
         Thread.sleep(2000);
         
-        // Show statistics
+        // Test 3: Show statistics
         System.out.println("\n3. Current statistics:");
         System.out.println(coordinator.getStatistics());
         
-        // Test file availability check
+        // Test 4: File availability check
         System.out.println("\n4. Checking file availability...");
         boolean available = coordinator.waitForFileAvailability(testFile, 5000);
         System.out.println("File available: " + available);
         
-        // Shutdown
         coordinator.shutdown();
         
         System.out.println("\n=== Demo Complete ===");

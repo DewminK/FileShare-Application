@@ -6,49 +6,29 @@ import java.util.concurrent.locks.*;
 import java.util.*;
 
 /**
- * Member 4 - Synchronization Handler
+ * Synchronization Handler - Ensures thread-safe access to shared files during concurrent operations.
+ * Prevents data corruption when multiple clients read or write simultaneously.
  * 
- * Ensures thread-safe access to shared files during concurrent operations.
- * Manages synchronization to prevent data corruption when multiple clients 
- * read or write simultaneously.
- * 
- * Networking Concepts Used:
- * - Multithreading and Synchronization using ReentrantLock
- * - Future and Callable Interfaces for asynchronous file transfer tasks
- * - TCP Communication management for multiple streams safely
- * 
- * @author Member 4 - Synchronization Handler
+ * Key Networking Concepts:
+ * - ReadWriteLock: Multiple readers OR single writer (no simultaneous read/write)
+ * - Semaphore: Limits maximum concurrent operations (prevents resource exhaustion)
+ * - Future/Callable: Asynchronous operations with timeout support
+ * - Fair locking: Prevents thread starvation in high-concurrency scenarios
  */
 public class SynchronizedFileAccess {
     
-    // ReentrantLock for each file - ensures only one write operation at a time per file
     private final Map<String, ReentrantReadWriteLock> fileLocks;
-    
-    // ExecutorService for handling asynchronous file transfer tasks
     private final ExecutorService executorService;
-    
-    // Tracks active file operations
     private final Map<String, Integer> activeOperations;
-    
-    // Lock for managing the file locks map itself
     private final ReentrantLock mapLock;
-    
-    // Semaphore to limit concurrent file operations
     private final Semaphore operationSemaphore;
-    
-    // Maximum concurrent file operations
     private static final int MAX_CONCURRENT_OPERATIONS = 10;
     
-    /**
-     * Constructor initializes the synchronization mechanisms
-     */
     public SynchronizedFileAccess() {
         this.fileLocks = new ConcurrentHashMap<>();
         this.activeOperations = new ConcurrentHashMap<>();
         this.mapLock = new ReentrantLock();
         this.operationSemaphore = new Semaphore(MAX_CONCURRENT_OPERATIONS, true);
-        
-        // Create a thread pool for asynchronous operations
         this.executorService = Executors.newFixedThreadPool(MAX_CONCURRENT_OPERATIONS);
         
         System.out.println("[SyncHandler] Synchronization Handler initialized with max " 
@@ -56,23 +36,20 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Get or create a ReadWriteLock for a specific file
-     * Thread-safe method to manage locks
+     * Thread-safe method to get or create a ReadWriteLock for a specific file.
+     * Uses fair locking to prevent thread starvation.
      */
     private ReentrantReadWriteLock getFileLock(String filename) {
         return fileLocks.computeIfAbsent(filename, k -> {
             System.out.println("[SyncHandler] Created new lock for file: " + filename);
-            return new ReentrantReadWriteLock(true); // Fair lock
+            return new ReentrantReadWriteLock(true);
         });
     }
     
     /**
-     * Synchronized file read operation
-     * Multiple threads can read simultaneously, but no writes during read
-     * 
-     * @param filename Name of the file to read
-     * @param targetStream Output stream to write file data to
-     * @return Future<Boolean> indicating success or failure
+     * Synchronized file READ operation.
+     * Multiple threads can read simultaneously (shared lock), but writes are blocked during reads.
+     * Returns Future for asynchronous execution with timeout capability.
      */
     public Future<Boolean> synchronizedFileRead(String filename, OutputStream targetStream) {
         return executorService.submit(new Callable<Boolean>() {
@@ -82,12 +59,10 @@ public class SynchronizedFileAccess {
                 Lock readLock = lock.readLock();
                 
                 try {
-                    // Acquire semaphore permit to limit concurrent operations
                     operationSemaphore.acquire();
                     System.out.println("[SyncHandler] Thread " + Thread.currentThread().getId() 
                                       + " acquired semaphore for reading: " + filename);
                     
-                    // Acquire read lock - multiple readers allowed
                     readLock.lock();
                     incrementActiveOperations(filename);
                     
@@ -95,7 +70,6 @@ public class SynchronizedFileAccess {
                                       + " acquired READ lock for: " + filename 
                                       + " (Active ops: " + getActiveOperations(filename) + ")");
                     
-                    // Perform the actual file reading
                     File file = new File(filename);
                     if (!file.exists()) {
                         System.err.println("[SyncHandler] File not found: " + filename);
@@ -140,13 +114,9 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Synchronized file write operation
-     * Only one thread can write at a time, blocks all reads during write
-     * 
-     * @param filename Name of the file to write
-     * @param sourceStream Input stream to read file data from
-     * @param fileSize Expected file size in bytes
-     * @return Future<Boolean> indicating success or failure
+     * Synchronized file WRITE operation.
+     * Only one thread can write at a time (exclusive lock), blocking all reads and writes.
+     * Ensures data integrity during file modifications.
      */
     public Future<Boolean> synchronizedFileWrite(String filename, InputStream sourceStream, long fileSize) {
         return executorService.submit(new Callable<Boolean>() {
@@ -156,12 +126,10 @@ public class SynchronizedFileAccess {
                 Lock writeLock = lock.writeLock();
                 
                 try {
-                    // Acquire semaphore permit to limit concurrent operations
                     operationSemaphore.acquire();
                     System.out.println("[SyncHandler] Thread " + Thread.currentThread().getId() 
                                       + " acquired semaphore for writing: " + filename);
                     
-                    // Acquire write lock - exclusive access
                     writeLock.lock();
                     incrementActiveOperations(filename);
                     
@@ -169,7 +137,6 @@ public class SynchronizedFileAccess {
                                       + " acquired WRITE lock for: " + filename 
                                       + " (Active ops: " + getActiveOperations(filename) + ")");
                     
-                    // Perform the actual file writing
                     File file = new File(filename);
                     File parentDir = file.getParentFile();
                     if (parentDir != null && !parentDir.exists()) {
@@ -216,12 +183,8 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Synchronized file append operation
-     * Exclusive write lock for appending data to file
-     * 
-     * @param filename Name of the file to append to
-     * @param data Data to append
-     * @return Future<Boolean> indicating success or failure
+     * Synchronized file APPEND operation.
+     * Exclusive write lock for appending data without overwriting existing content.
      */
     public Future<Boolean> synchronizedFileAppend(String filename, byte[] data) {
         return executorService.submit(new Callable<Boolean>() {
@@ -239,7 +202,7 @@ public class SynchronizedFileAccess {
                                       + " appending to: " + filename);
                     
                     File file = new File(filename);
-                    try (FileOutputStream fos = new FileOutputStream(file, true); // append mode
+                    try (FileOutputStream fos = new FileOutputStream(file, true);
                          BufferedOutputStream bos = new BufferedOutputStream(fos)) {
                         bos.write(data);
                         bos.flush();
@@ -266,37 +229,21 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Check if a file is currently being accessed
-     * Thread-safe method using synchronized block
-     * 
-     * @param filename Name of the file to check
-     * @return true if file has active operations
+     * Check if a file is currently being accessed.
+     * Thread-safe using synchronized block.
      */
     public synchronized boolean isFileInUse(String filename) {
         return activeOperations.getOrDefault(filename, 0) > 0;
     }
     
-    /**
-     * Get number of active operations on a file
-     * Thread-safe method using synchronized block
-     * 
-     * @param filename Name of the file
-     * @return Number of active operations
-     */
     public synchronized int getActiveOperations(String filename) {
         return activeOperations.getOrDefault(filename, 0);
     }
     
-    /**
-     * Increment active operations counter for a file
-     */
     private synchronized void incrementActiveOperations(String filename) {
         activeOperations.put(filename, activeOperations.getOrDefault(filename, 0) + 1);
     }
     
-    /**
-     * Decrement active operations counter for a file
-     */
     private synchronized void decrementActiveOperations(String filename) {
         int current = activeOperations.getOrDefault(filename, 0);
         if (current > 0) {
@@ -305,12 +252,8 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Wait for all operations on a file to complete
-     * Uses polling with timeout
-     * 
-     * @param filename Name of the file
-     * @param timeoutMs Maximum time to wait in milliseconds
-     * @return true if all operations completed within timeout
+     * Wait for all operations on a file to complete.
+     * Uses polling with timeout to prevent indefinite waiting.
      */
     public boolean waitForFileOperations(String filename, long timeoutMs) {
         long startTime = System.currentTimeMillis();
@@ -333,9 +276,6 @@ public class SynchronizedFileAccess {
         return true;
     }
     
-    /**
-     * Get statistics about synchronization handler
-     */
     public synchronized Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("totalFileLocks", fileLocks.size());
@@ -349,7 +289,7 @@ public class SynchronizedFileAccess {
     }
     
     /**
-     * Shutdown the synchronization handler gracefully
+     * Graceful shutdown - waits for pending operations before terminating executor service.
      */
     public void shutdown() {
         System.out.println("[SyncHandler] Shutting down Synchronization Handler...");
@@ -367,15 +307,12 @@ public class SynchronizedFileAccess {
         System.out.println("[SyncHandler] Shutdown complete");
     }
     
-    /**
-     * Test demonstration of synchronization handler
-     */
+    // Demo: Tests concurrent reads (allowed) and concurrent writes (queued)
     public static void main(String[] args) {
         System.out.println("=== Synchronization Handler Demo ===\n");
         
         SynchronizedFileAccess syncHandler = new SynchronizedFileAccess();
         
-        // Create a test file
         String testFile = "test_sync_file.txt";
         try {
             File file = new File(testFile);
@@ -389,7 +326,7 @@ public class SynchronizedFileAccess {
             return;
         }
         
-        // Test concurrent reads (should succeed)
+        // Test 1: Concurrent reads (should all execute simultaneously)
         System.out.println("Testing concurrent READS...");
         List<Future<Boolean>> readFutures = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
@@ -399,7 +336,6 @@ public class SynchronizedFileAccess {
                     @Override
                     public void write(byte[] b, int off, int len) {
                         super.write(b, off, len);
-                        // Simulate some processing time
                         try {
                             Thread.sleep(100);
                         } catch (InterruptedException e) {
@@ -410,7 +346,6 @@ public class SynchronizedFileAccess {
             readFutures.add(future);
         }
         
-        // Wait for all reads to complete
         readFutures.forEach(f -> {
             try {
                 f.get();
@@ -421,7 +356,7 @@ public class SynchronizedFileAccess {
         
         System.out.println("\n" + syncHandler.getStatistics() + "\n");
         
-        // Test concurrent write (should be exclusive)
+        // Test 2: Concurrent writes (should execute sequentially - one at a time)
         System.out.println("Testing concurrent WRITES...");
         List<Future<Boolean>> writeFutures = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
@@ -432,7 +367,6 @@ public class SynchronizedFileAccess {
             writeFutures.add(future);
         }
         
-        // Wait for all writes to complete
         writeFutures.forEach(f -> {
             try {
                 f.get();
@@ -443,7 +377,6 @@ public class SynchronizedFileAccess {
         
         System.out.println("\n" + syncHandler.getStatistics() + "\n");
         
-        // Wait for all operations and shutdown
         syncHandler.waitForFileOperations(testFile, 5000);
         syncHandler.shutdown();
         
