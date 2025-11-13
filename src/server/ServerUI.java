@@ -25,12 +25,8 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * JavaFX-based User Interface for File Sharing Server
- * Provides a modern GUI for managing the server, viewing connected clients and
- * activity
- * Uses the same design structure as ClientUI
- */
+
+ 
 public class ServerUI extends Application {
 
     private ServerMain server;
