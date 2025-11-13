@@ -5,11 +5,6 @@ import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * TCP Client for File Sharing Application
- * Handles connection to server and basic communication
- * Uses Socket for TCP connection and Stream Communication
- */
 public class ClientMain {
     private Socket socket;
     private PrintWriter out;
@@ -26,29 +21,34 @@ public class ClientMain {
         this.listeners = new ArrayList<>();
     }
 
-    /**
-     * Establish connection with the server using TCP Socket
-     */
+    public ClientMain(Socket authenticatedSocket) {
+        try {
+            this.socket = authenticatedSocket;
+            this.serverAddress = authenticatedSocket.getInetAddress().getHostAddress();
+            this.serverPort = authenticatedSocket.getPort();
+            this.out = new PrintWriter(socket.getOutputStream(), true);
+            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            this.connected = true;
+            this.listeners = new ArrayList<>();
+            System.out.println("Using authenticated connection to server");
+            startListening();
+            notifyConnectionStatus(true);
+        } catch (IOException e) {
+            System.err.println("Failed to initialize authenticated connection: " + e.getMessage());
+            this.connected = false;
+        }
+    }
+
     public boolean connect() {
         try {
-            // Step 2: Create a Socket - TCP Client Socket
             socket = new Socket(serverAddress, serverPort);
-
-            // Step 3: Set up output stream to send data to server
             out = new PrintWriter(socket.getOutputStream(), true);
-
-            // Step 4: Set up input stream to receive data from server
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
             connected = true;
             System.out.println("Connected to server at " + serverAddress + ":" + serverPort);
-
-            // Start listening for server messages in a separate thread
             startListening();
-
             notifyConnectionStatus(true);
             return true;
-
         } catch (IOException e) {
             System.err.println("Failed to connect to server: " + e.getMessage());
             connected = false;
@@ -57,10 +57,6 @@ public class ClientMain {
         }
     }
 
-    /**
-     * Start listening for server responses in a separate thread
-     * Uses Anonymous Class for thread creation (as per lecture slides)
-     */
     private void startListening() {
         Thread listenerThread = new Thread(new Runnable() {
             @Override
@@ -83,9 +79,6 @@ public class ClientMain {
         listenerThread.start();
     }
 
-    /**
-     * Send a command to the server
-     */
     public void sendCommand(String command) {
         if (connected && out != null) {
             out.println(command);
@@ -94,37 +87,22 @@ public class ClientMain {
         }
     }
 
-    /**
-     * Request list of files from server
-     */
     public void requestFileList() {
         sendCommand("LIST_FILES");
     }
 
-    /**
-     * Request to download a file
-     */
     public void requestDownload(String filename) {
         sendCommand("DOWNLOAD:" + filename);
     }
 
-    /**
-     * Request to upload a file
-     */
     public void requestUpload(String filename, long fileSize) {
         sendCommand("UPLOAD:" + filename + ":" + fileSize);
     }
 
-    /**
-     * Send chat message to server
-     */
     public void sendChatMessage(String message) {
         sendCommand("CHAT:" + message);
     }
 
-    /**
-     * Step 5: Close the connection and free up system resources
-     */
     public void disconnect() {
         try {
             connected = false;
@@ -149,7 +127,6 @@ public class ClientMain {
         return socket;
     }
 
-    // Listener pattern for UI updates
     public void addConnectionListener(ConnectionListener listener) {
         listeners.add(listener);
     }
@@ -172,28 +149,20 @@ public class ClientMain {
         void onMessageReceived(String message);
     }
 
-    /**
-     * Simple test main method
-     */
     public static void main(String[] args) {
-        // Example usage
         ClientMain client = new ClientMain("localhost", 9090);
 
         if (client.connect()) {
-            // Send a test message
             client.sendCommand("Hello, Server!");
 
-            // Request file list
             client.requestFileList();
 
-            // Keep running for a bit
             try {
                 Thread.sleep(5000);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
 
-            // Disconnect
             client.disconnect();
         }
     }

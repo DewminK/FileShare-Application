@@ -8,17 +8,6 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import server.Notifier;
 
-/**
- * Member 1 - Server Developer
- * TCP Server for File Sharing Application
- * Handles multiple client connections concurrently using multithreading
- *
- * Networking Concepts Used:
- * - ServerSocket for TCP server
- * - Socket for client communication
- * - Multithreading - spawns thread for each client
- * - I/O Streams for data transfer
- */
 public class ServerMain {
     private ServerSocket serverSocket;
     private boolean running;
@@ -26,7 +15,8 @@ public class ServerMain {
     private List<ClientHandler> connectedClients;
     private List<ServerListener> listeners;
     private String sharedDirectory;
-    private Notifier notifier; // Member 5: Broadcaster/Notifier
+    private Notifier notifier;
+    private AuthenticationHandler authHandler;
 
     public ServerMain(int port, String sharedDirectory) {
         this.port = port;
@@ -34,29 +24,24 @@ public class ServerMain {
         this.running = false;
         this.connectedClients = new CopyOnWriteArrayList<>();
         this.listeners = new ArrayList<>();
+        this.authHandler = new AuthenticationHandler();
 
-        // Create shared directory if it doesn't exist
         File dir = new File(sharedDirectory);
         if (!dir.exists()) {
             dir.mkdirs();
             System.out.println("[Server] Created shared directory: " + sharedDirectory);
         }
 
-        // Initialize Member 5: Broadcaster/Notifier
-        // Using UDP broadcasting on port 9876
         this.notifier = new Notifier(true, 9876);
         System.out.println("[Server] Notifier initialized (UDP port 9876)");
+        System.out.println("[Server] Authentication handler initialized");
     }
 
-    /**
-     * Start the server and listen for client connections
-     */
     public void start() {
         try {
             serverSocket = new ServerSocket(port);
             running = true;
 
-            // Start Member 5: Notifier
             notifier.start();
             System.out.println("[Server] Notifier service started");
 
@@ -64,10 +49,8 @@ public class ServerMain {
             System.out.println("[Server] Started on port " + port);
             System.out.println("[Server] Shared directory: " + sharedDirectory);
 
-            // Broadcast server started message
             notifier.notifyServerMessage("File Sharing Server started on port " + port);
 
-            // Accept client connections in a separate thread
             Thread acceptThread = new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -82,37 +65,16 @@ public class ServerMain {
         }
     }
 
-    /**
-     * Accept incoming client connections
-     */
     private void acceptConnections() {
         while (running) {
             try {
                 Socket clientSocket = serverSocket.accept();
                 String clientAddress = clientSocket.getInetAddress().getHostAddress();
-                System.out.println("[Server] New client connected: " + clientAddress);
+                System.out.println("[Server] New connection attempt from: " + clientAddress);
 
-                // Create a handler for this client
                 ClientHandler handler = new ClientHandler(clientSocket, this);
-                connectedClients.add(handler);
-
-                // Start handler thread
                 Thread handlerThread = new Thread(handler);
                 handlerThread.start();
-
-                notifyClientConnected(clientAddress);
-
-                // Broadcast client connection via Member 5: Notifier
-                notifier.notifyClientConnected(clientAddress);
-
-                // Also broadcast to all connected clients via TCP
-                broadcastToClients("CLIENT_CONNECTED", "New client connected", clientAddress);
-
-                // Update user list for all clients
-                broadcastUserList();
-
-                // Notify new client they joined chat
-                handler.sendMessage("USER_JOINED:" + clientAddress);
 
             } catch (IOException e) {
                 if (running) {
@@ -122,19 +84,14 @@ public class ServerMain {
         }
     }
 
-    /**
-     * Stop the server
-     */
     public void stop() {
         running = false;
 
-        // Close all client connections
         for (ClientHandler handler : connectedClients) {
             handler.disconnect();
         }
         connectedClients.clear();
 
-        // Close server socket
         try {
             if (serverSocket != null && !serverSocket.isClosed()) {
                 serverSocket.close();
@@ -143,7 +100,6 @@ public class ServerMain {
             System.err.println("[Server] Error closing server socket: " + e.getMessage());
         }
 
-        // Stop Member 5: Notifier
         if (notifier != null) {
             notifier.stop();
             System.out.println("[Server] Notifier service stopped");
@@ -153,28 +109,31 @@ public class ServerMain {
         System.out.println("[Server] Stopped");
     }
 
-    /**
-     * Remove a client handler from the list
-     */
+    public void addAuthenticatedClient(ClientHandler handler) {
+        connectedClients.add(handler);
+        String userName = handler.getUserName();
+        String clientAddr = handler.getClientAddress();
+        notifyClientConnected(userName + " (" + clientAddr + ")");
+        notifier.notifyClientConnected(userName);
+        broadcastToClients("CLIENT_CONNECTED", "New user joined", userName);
+        broadcastUserList();
+    }
+
     public void removeClient(ClientHandler handler) {
+        String userName = handler.getUserName();
         String clientAddr = handler.getClientAddress();
         connectedClients.remove(handler);
-        notifyClientDisconnected(clientAddr);
+        notifyClientDisconnected(userName + " (" + clientAddr + ")");
 
-        // Broadcast client disconnection via Member 5: Notifier
         if (notifier != null) {
-            notifier.notifyClientDisconnected(clientAddr);
+            notifier.notifyClientDisconnected(userName);
         }
 
-        // Also broadcast to all connected clients via TCP
-        broadcastToClients("CLIENT_DISCONNECTED", "Client disconnected", clientAddr);
-
-        // Update user list for remaining clients
+        broadcastToClients("CLIENT_DISCONNECTED", "User disconnected", userName);
         broadcastUserList();
 
-        // Notify all clients that user left chat
         for (ClientHandler h : connectedClients) {
-            h.sendMessage("USER_LEFT:" + clientAddr);
+            h.sendMessage("USER_LEFT:" + userName);
         }
     }
 
@@ -202,7 +161,6 @@ public class ServerMain {
         return clientsInfo;
     }
 
-    // Listener pattern for UI updates
     public void addServerListener(ServerListener listener) {
         listeners.add(listener);
     }
@@ -251,9 +209,6 @@ public class ServerMain {
         }
     }
 
-    /**
-     * Broadcast notification to all clients (TCP method)
-     */
     public void broadcastToClients(String type, String message, String details) {
         String notification = String.format("NOTIFICATION:[%s]%s|%s", type, message, details);
         for (ClientHandler handler : connectedClients) {
@@ -262,9 +217,6 @@ public class ServerMain {
         System.out.println("[Server] Broadcasted to " + connectedClients.size() + " clients: " + notification);
     }
 
-    /**
-     * Broadcast chat message to all connected clients
-     */
     public void broadcastChatMessage(String sender, String message) {
         String chatMessage = "CHAT:" + sender + ":" + message;
         for (ClientHandler handler : connectedClients) {
@@ -273,13 +225,10 @@ public class ServerMain {
         System.out.println("[Server] Chat broadcast from " + sender + ": " + message);
     }
 
-    /**
-     * Send user list to all clients
-     */
     private void broadcastUserList() {
         StringBuilder userList = new StringBuilder("USER_LIST:");
         for (ClientHandler handler : connectedClients) {
-            userList.append(handler.getClientAddress()).append("|");
+            userList.append(handler.getUserName()).append("|");
         }
         String message = userList.toString();
         for (ClientHandler handler : connectedClients) {
@@ -287,33 +236,19 @@ public class ServerMain {
         }
     }
 
-    /**
-     * Listener interface for server events
-     */
     public interface ServerListener {
         void onServerStarted(int port);
-
         void onServerStopped();
-
         void onClientConnected(String clientAddress);
-
         void onClientDisconnected(String clientAddress);
-
         void onFileTransfer(String clientAddress, String operation, String filename);
-
         void onServerError(String error);
     }
 
-    /**
-     * Listener interface for chat messages
-     */
     public interface ChatListener extends ServerListener {
         void onChatMessage(String sender, String message);
     }
 
-    /**
-     * Client Handler - handles individual client connection
-     */
     private static class ClientHandler implements Runnable {
         private Socket socket;
         private ServerMain server;
@@ -321,12 +256,15 @@ public class ServerMain {
         private BufferedReader in;
         private String clientAddress;
         private long connectionStartTime;
+        private boolean authenticated;
+        private String userName;
 
         public ClientHandler(Socket socket, ServerMain server) {
             this.socket = socket;
             this.server = server;
             this.clientAddress = socket.getInetAddress().getHostAddress();
             this.connectionStartTime = System.currentTimeMillis();
+            this.authenticated = false;
         }
 
         @Override
@@ -335,19 +273,66 @@ public class ServerMain {
                 out = new PrintWriter(socket.getOutputStream(), true);
                 in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-                // Send welcome message
-                out.println("CONNECTED:Welcome to File Sharing Server");
-
                 String command;
                 while ((command = in.readLine()) != null) {
                     System.out.println("[Server] Command from " + clientAddress + ": " + command);
-                    handleCommand(command);
+
+                    if (!authenticated) {
+                        if (command.startsWith("LOGIN:") || command.startsWith("SIGNUP:")) {
+                            handleAuthentication(command);
+                        } else {
+                            out.println("ERROR:Not authenticated");
+                        }
+                    } else {
+                        handleCommand(command);
+                    }
                 }
 
             } catch (IOException e) {
                 System.err.println("[Server] Client handler error: " + e.getMessage());
             } finally {
-                disconnect();
+                if (authenticated) {
+                    disconnect();
+                }
+            }
+        }
+
+        private void handleAuthentication(String command) {
+            if (command.startsWith("LOGIN:")) {
+                String[] parts = command.split(":");
+                if (parts.length >= 3) {
+                    String email = parts[1];
+                    String password = parts[2];
+
+                    String name = server.authHandler.authenticate(email, password);
+                    if (name != null) {
+                        authenticated = true;
+                        userName = name;
+                        out.println("LOGIN_SUCCESS:" + name);
+                        server.addAuthenticatedClient(this);
+                        out.println("CONNECTED:Welcome " + name);
+                        System.out.println("[Server] Client authenticated: " + userName + " (" + clientAddress + ")");
+                    } else {
+                        out.println("LOGIN_FAILED:Invalid credentials");
+                    }
+                } else {
+                    out.println("LOGIN_FAILED:Invalid command format");
+                }
+            } else if (command.startsWith("SIGNUP:")) {
+                String[] parts = command.split(":");
+                if (parts.length >= 4) {
+                    String name = parts[1];
+                    String email = parts[2];
+                    String password = parts[3];
+
+                    if (server.authHandler.signup(name, email, password)) {
+                        out.println("SIGNUP_SUCCESS");
+                    } else {
+                        out.println("SIGNUP_FAILED:EMAIL_EXISTS");
+                    }
+                } else {
+                    out.println("SIGNUP_FAILED:Invalid command format");
+                }
             }
         }
 
@@ -366,15 +351,10 @@ public class ServerMain {
         }
 
         private void handleChatMessage(String command) {
-            // Parse: CHAT:message
             String message = command.substring(5);
-            System.out.println("[Server] Chat from " + clientAddress + ": " + message);
-
-            // Notify UI about chat message
-            server.notifyChatMessage(clientAddress, message);
-
-            // Broadcast to all clients
-            server.broadcastChatMessage(clientAddress, message);
+            System.out.println("[Server] Chat from " + userName + ": " + message);
+            server.notifyChatMessage(userName, message);
+            server.broadcastChatMessage(userName, message);
         }
 
         private void handleListFiles() {
@@ -397,7 +377,6 @@ public class ServerMain {
         }
 
         private void handleUpload(String command) {
-            // Parse: UPLOAD:filename:filesize
             String[] parts = command.split(":");
             if (parts.length < 3) {
                 out.println("ERROR:Invalid upload command");
@@ -410,10 +389,8 @@ public class ServerMain {
             System.out.println("[Server] Receiving upload: " + filename + " (" + fileSize + " bytes)");
             server.notifyFileTransfer(clientAddress, "UPLOAD", filename);
 
-            // Send ready signal
             out.println("READY:Ready to receive file");
 
-            // Receive the file data
             try {
                 File outputFile = new File(server.getSharedDirectory(), filename);
                 FileOutputStream fos = new FileOutputStream(outputFile);
@@ -424,7 +401,6 @@ public class ServerMain {
                 int bytesRead;
                 long totalBytesReceived = 0;
 
-                // Read file data directly from socket
                 while (totalBytesReceived < fileSize &&
                         (bytesRead = inputStream.read(buffer, 0,
                                 (int) Math.min(buffer.length, fileSize - totalBytesReceived))) != -1) {
@@ -438,10 +414,7 @@ public class ServerMain {
                 System.out.println("[Server] Upload completed: " + filename + " (" + totalBytesReceived + " bytes)");
                 out.println("UPLOAD_SUCCESS:File uploaded successfully");
 
-                // Broadcast new file notification via Member 5: Notifier
                 server.notifier.notifyNewFile(filename, clientAddress);
-
-                // Also broadcast to all connected clients via TCP
                 server.broadcastToClients("NEW_FILE", clientAddress + " uploaded", filename);
 
             } catch (IOException e) {
@@ -461,13 +434,38 @@ public class ServerMain {
 
             System.out.println("[Server] Sending file: " + filename);
             server.notifyFileTransfer(clientAddress, "DOWNLOAD", filename);
-
-            // TODO: Member 4 integration point for synchronized file read
-            // For now, basic implementation
             out.println("FILE_SIZE:" + file.length());
         }
 
         public void disconnect() {
+            cleanupConnection();
+        }
+
+        public String getClientAddress() {
+            return userName != null ? userName : clientAddress;
+        }
+
+        public String getUserName() {
+            return userName;
+        }
+
+        public long getConnectionTime() {
+            return (System.currentTimeMillis() - connectionStartTime) / 1000;
+        }
+
+        public void sendNotification(String notification) {
+            if (out != null) {
+                out.println(notification);
+            }
+        }
+
+        public void sendMessage(String message) {
+            if (out != null) {
+                out.println(message);
+            }
+        }
+
+        private void cleanupConnection() {
             try {
                 if (out != null)
                     out.close();
@@ -476,47 +474,21 @@ public class ServerMain {
                 if (socket != null && !socket.isClosed())
                     socket.close();
             } catch (IOException e) {
-                System.err.println("[Server] Error closing client connection: " + e.getMessage());
             }
-            server.removeClient(this);
-            System.out.println("[Server] Client disconnected: " + clientAddress);
-        }
 
-        public String getClientAddress() {
-            return clientAddress;
-        }
-
-        public long getConnectionTime() {
-            return (System.currentTimeMillis() - connectionStartTime) / 1000;
-        }
-
-        /**
-         * Send notification to this client
-         */
-        public void sendNotification(String notification) {
-            if (out != null) {
-                out.println(notification);
-            }
-        }
-
-        /**
-         * Send message to this client
-         */
-        public void sendMessage(String message) {
-            if (out != null) {
-                out.println(message);
+            if (authenticated) {
+                server.removeClient(this);
+                System.out.println("[Server] Client disconnected: " + userName);
+            } else {
+                System.out.println("[Server] Unauthenticated connection closed from: " + clientAddress);
             }
         }
     }
 
-    /**
-     * Simple test main method
-     */
     public static void main(String[] args) {
         ServerMain server = new ServerMain(9090, "./shared_files");
         server.start();
 
-        // Keep running
         System.out.println("Server is running. Press Ctrl+C to stop.");
         try {
             Thread.sleep(Long.MAX_VALUE);
