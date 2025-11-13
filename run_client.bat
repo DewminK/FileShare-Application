@@ -1,11 +1,5 @@
 @echo off
 REM Batch file to compile and run the File Sharing Client
-
-echo ========================================
-echo File Sharing Client - Startup Script
-echo ========================================
-echo.
-
 REM Navigate to the project directory
 cd /d "%~dp0"
 
@@ -34,11 +28,10 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo [2/3] Compilation successful!
 echo.
-echo [3/3] Starting client GUI...
+echo [3/3] Starting client login...
 echo.
 
-REM Run with JavaFX modules
-java --module-path "%JAVAFX_PATH%" --add-modules %JAVAFX_MODULES% -cp bin client.ClientUI
+java --module-path "%JAVAFX_PATH%" --add-modules %JAVAFX_MODULES% -cp bin client.LoginUI
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

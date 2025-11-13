@@ -17,6 +17,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.time.LocalTime;
@@ -62,6 +63,11 @@ public class ClientUI extends Application {
     private ListView<String> onlineUsersList;
     private ObservableList<String> onlineUsers;
 
+    // User info fields
+    private String userEmail;
+    private String userName;
+    private Socket authenticatedSocket;
+
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("File Sharing Client - Network Programming");
@@ -100,6 +106,11 @@ public class ClientUI extends Application {
 
         // Start UDP broadcast listener for Member 5 notifications
         startUDPListener();
+
+        // If we have an authenticated socket, use it to connect
+        if (authenticatedSocket != null) {
+            connectWithAuthenticatedSocket();
+        }
 
         // Handle window close
         primaryStage.setOnCloseRequest(event -> {
@@ -993,6 +1004,55 @@ public class ClientUI extends Application {
             System.err.println("[ClientUI] Error parsing UDP broadcast: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    public void setUserInfo(String email, String name) {
+        this.userEmail = email;
+        this.userName = name;
+    }
+
+    public void setAuthenticatedSocket(Socket socket) {
+        this.authenticatedSocket = socket;
+    }
+
+    private void connectWithAuthenticatedSocket() {
+        Platform.runLater(() -> {
+            client = new ClientMain(authenticatedSocket);
+            fileHandler = new FileTransferHandler(client, "./downloads");
+
+            client.addConnectionListener(new ClientMain.ConnectionListener() {
+                @Override
+                public void onConnectionStatusChanged(boolean connected) {
+                    Platform.runLater(() -> updateConnectionStatus(connected));
+                }
+
+                @Override
+                public void onMessageReceived(String message) {
+                    Platform.runLater(() -> {
+                        log("Server: " + message);
+                        parseServerMessage(message);
+                    });
+                }
+            });
+
+            log("Using authenticated connection");
+            serverAddressField.setText("localhost");
+            serverPortField.setText("9090");
+            serverAddressField.setDisable(true);
+            serverPortField.setDisable(true);
+            connectButton.setDisable(true);
+
+            updateConnectionStatus(true);
+            refreshFileList();
+        });
+    }
+
+    public void autoConnect(String serverAddress, int serverPort) {
+        Platform.runLater(() -> {
+            serverAddressField.setText(serverAddress);
+            serverPortField.setText(String.valueOf(serverPort));
+            connectToServer();
+        });
     }
 
     public static void main(String[] args) {
