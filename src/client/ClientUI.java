@@ -402,7 +402,11 @@ public class ClientUI extends Application {
             @Override
             public void onMessageReceived(String message) {
                 Platform.runLater(() -> {
-                    log("Server: " + message);
+                    // Filter out binary data before logging to UI
+                    // Only log if it's a legitimate protocol message
+                    if (shouldLogMessage(message)) {
+                        log("Server: " + message);
+                    }
                     parseServerMessage(message);
                 });
             }
@@ -489,7 +493,7 @@ public class ClientUI extends Application {
         if (file != null) {
             log("Uploading: " + file.getName() + " (" + formatFileSize(file.length()) + ")");
 
-            fileHandler.uploadFile(file, new FileTransferHandler.FileTransferListener() {
+            fileHandler.uploadFileNIO(file, new FileTransferHandler.FileTransferListener() {
                 @Override
                 public void onTransferStarted(String filename, long fileSize) {
                     Platform.runLater(() -> {
@@ -541,7 +545,7 @@ public class ClientUI extends Application {
 
         log("Downloading: " + selectedFile.getName());
 
-        fileHandler.downloadFile(selectedFile.getName(), selectedFile.getSizeBytes(),
+        fileHandler.downloadFileNIO(selectedFile.getName(), selectedFile.getSizeBytes(),
                 new FileTransferHandler.FileTransferListener() {
                     @Override
                     public void onTransferStarted(String filename, long fileSize) {
@@ -644,10 +648,113 @@ public class ClientUI extends Application {
             String username = message.substring(10);
             onlineUsers.remove(username);
             appendChatMessage("System", username + " left the chat");
+        } else if (message.startsWith("FILE_SIZE:")) {
+            // File size notification for download - don't log as unhandled
+            // The download handler will process the actual file data
+            log("Server preparing file for download...");
         } else {
-            // Log any unhandled messages
-            System.out.println("DEBUG: Unhandled message: " + message);
+            // Filter out binary data (file content being misread as text)
+            // Only log legitimate unhandled protocol messages
+            if (message.length() > 5 && isPrintableText(message) &&
+                !message.trim().isEmpty() &&
+                message.length() < 200) { // Reasonable message length
+                // Log only if it looks like actual text protocol messages
+                System.out.println("DEBUG: Unhandled message: " + message);
+            }
+            // Silently ignore binary/corrupted data (file transfer in progress)
         }
+    }
+
+    /**
+     * Determine if a server message should be logged to the UI
+     * Filters out binary data, PDF content, and file transfer noise
+     */
+    private boolean shouldLogMessage(String message) {
+        if (message == null || message.isEmpty() || message.trim().isEmpty()) {
+            return false;
+        }
+
+        // Always log known protocol messages
+        if (message.startsWith("FILE_LIST:") ||
+            message.startsWith("NOTIFICATION:") ||
+            message.startsWith("CHAT:") ||
+            message.startsWith("USER_LIST:") ||
+            message.startsWith("USER_JOINED:") ||
+            message.startsWith("USER_LEFT:") ||
+            message.startsWith("FILE_SIZE:") ||
+            message.startsWith("READY:") ||
+            message.startsWith("UPLOAD_SUCCESS:") ||
+            message.startsWith("DOWNLOAD_SUCCESS:") ||
+            message.startsWith("ERROR:")) {
+            return true;
+        }
+
+        // Filter out known binary/PDF content
+        if (message.startsWith("<?xpacket") ||
+            message.contains("<rdf:RDF") ||
+            message.contains("xmlns:") ||
+            message.startsWith("<") && message.endsWith(">") ||
+            message.startsWith("stream") ||
+            message.startsWith("endstream") ||
+            message.startsWith("xref") ||
+            message.startsWith("trailer") ||
+            message.startsWith("startxref") ||
+            message.startsWith("%%EOF") ||
+            message.matches("^\\d{10} \\d{5} [nf]$") ||
+            message.matches("^\\d+ \\d+ obj$") ||
+            message.matches("^\\d+ \\d+$") ||
+            message.startsWith("0000") ||
+            message.contains("<<") && message.contains(">>") ||
+            message.contains("obj") && message.length() < 30) {
+            return false;
+        }
+
+        // Filter out messages with too many non-printable characters or whitespace-only
+        if (!isPrintableText(message) || message.length() > 500) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if a message contains mostly printable text (not binary file data)
+     * Returns false for binary data, PDF content, etc.
+     */
+    private boolean isPrintableText(String message) {
+        if (message == null || message.isEmpty()) return false;
+
+        // Known binary/PDF markers - immediately reject
+        if (message.startsWith("stream") || message.startsWith("endstream") ||
+            message.startsWith("xref") || message.startsWith("trailer") ||
+            message.startsWith("startxref") || message.startsWith("%%EOF") ||
+            message.contains("obj") && message.contains("endobj") ||
+            message.matches("^\\d{10} \\d{5} [nf]$") || // PDF xref entries
+            message.matches("^\\d+ \\d+ obj$") || // PDF object headers
+            message.startsWith("0000") || // PDF xref numbers
+            message.contains("<<") && message.contains(">>")) { // PDF dictionaries
+            return false;
+        }
+
+        // Check for high percentage of non-ASCII or control characters
+        int nonPrintable = 0;
+        int total = Math.min(message.length(), 100); // Check more chars
+
+        for (int i = 0; i < total; i++) {
+            char c = message.charAt(i);
+            // Reject if contains null bytes or many control characters
+            if (c == 0 || (c < 32 && c != '\t' && c != '\n' && c != '\r')) {
+                nonPrintable++;
+            } else if (c > 126 && c < 160) { // Extended ASCII control chars
+                nonPrintable++;
+            } else if (c > 255) { // Non-Latin characters (likely binary)
+                nonPrintable++;
+            }
+        }
+
+        // If more than 10% is non-printable, it's probably binary data
+        // More strict threshold to catch more binary content
+        return (nonPrintable * 100 / total) < 10;
     }
 
     /**

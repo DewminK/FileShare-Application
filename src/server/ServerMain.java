@@ -435,6 +435,32 @@ public class ServerMain {
             System.out.println("[Server] Sending file: " + filename);
             server.notifyFileTransfer(clientAddress, "DOWNLOAD", filename);
             out.println("FILE_SIZE:" + file.length());
+
+            // Send the actual file data
+            try {
+                FileInputStream fis = new FileInputStream(file);
+                BufferedInputStream bis = new BufferedInputStream(fis);
+
+                OutputStream outputStream = socket.getOutputStream();
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                long totalBytesSent = 0;
+
+                while ((bytesRead = bis.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                    outputStream.flush();
+                    totalBytesSent += bytesRead;
+                }
+
+                bis.close();
+                fis.close();
+
+                System.out.println("[Server] Download completed: " + filename + " (" + totalBytesSent + " bytes)");
+
+            } catch (IOException e) {
+                System.err.println("[Server] Error sending file: " + e.getMessage());
+                out.println("DOWNLOAD_FAILED:Error sending file");
+            }
         }
 
         public void disconnect() {

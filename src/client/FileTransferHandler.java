@@ -13,12 +13,17 @@ public class FileTransferHandler {
 
     public FileTransferHandler(ClientMain client, String localDirectory) {
         this.client = client;
-        this.localDirectory = localDirectory;
 
-        // Create local directory if it doesn't exist
+        // Convert to absolute path
         File dir = new File(localDirectory);
+        this.localDirectory = dir.getAbsolutePath();
+
+        // Ensure download directory exists
         if (!dir.exists()) {
-            dir.mkdirs();
+            boolean created = dir.mkdirs();
+            System.out.println("[FileTransferHandler] Downloads directory " +
+                             (created ? "created" : "already exists") +
+                             " at: " + this.localDirectory);
         }
     }
 
@@ -184,6 +189,230 @@ public class FileTransferHandler {
             }
         }
     }
+
+    /**
+     * Upload a file to the server using NIO (FileHandler)
+     * Uses Multithreading for simultaneous file upload/download operations
+     */
+    public void uploadFileNIO(File file, FileTransferListener listener) {
+        // Create a new thread for upload operation to allow simultaneous operations
+        Thread uploadThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Notify start
+                    if (listener != null) {
+                        listener.onTransferStarted(file.getName(), file.length());
+                    }
+
+                    // First, send upload request to server
+                    client.requestUpload(file.getName(), file.length());
+
+                    // Wait a bit for server to prepare
+                    Thread.sleep(100);
+
+                    // Get socket channel for NIO transfer
+                    Socket socket = client.getSocket();
+                    java.nio.channels.SocketChannel socketChannel = socket.getChannel();
+
+                    // If socket doesn't have a channel, create one from the socket
+                    if (socketChannel == null) {
+                        // For regular socket, we need to use Channels.newChannel()
+                        java.nio.channels.WritableByteChannel channel =
+                            java.nio.channels.Channels.newChannel(socket.getOutputStream());
+
+                        // Use FileHandler to send file using NIO
+                        shared.FileHandler fileHandler = new shared.FileHandler();
+                        java.nio.file.Path filePath = file.toPath();
+
+                        long totalBytesSent = fileHandler.sendFile(filePath, channel);
+
+                        System.out.println("File uploaded successfully using NIO: " + file.getName() +
+                                         " (" + totalBytesSent + " bytes)");
+
+                        // Notify completion
+                        if (listener != null) {
+                            listener.onTransferCompleted(file.getName(), true);
+                        }
+                    } else {
+                        // Use SocketChannel directly
+                        shared.FileHandler fileHandler = new shared.FileHandler();
+                        java.nio.file.Path filePath = file.toPath();
+
+                        long totalBytesSent = fileHandler.sendFile(filePath, socketChannel);
+
+                        System.out.println("File uploaded successfully using NIO: " + file.getName() +
+                                         " (" + totalBytesSent + " bytes)");
+
+                        // Notify completion
+                        if (listener != null) {
+                            listener.onTransferCompleted(file.getName(), true);
+                        }
+                    }
+
+                } catch (IOException e) {
+                    System.err.println("Error uploading file with NIO: " + e.getMessage());
+                    if (listener != null) {
+                        listener.onTransferFailed(file.getName(), e.getMessage());
+                    }
+                } catch (InterruptedException e) {
+                    System.err.println("Upload interrupted: " + e.getMessage());
+                    if (listener != null) {
+                        listener.onTransferFailed(file.getName(), "Upload interrupted");
+                    }
+                }
+            }
+        });
+
+        uploadThread.start();
+    }
+
+    /**
+     * Download a file from the server using efficient I/O with NIO-inspired approach
+     * Uses Multithreading for simultaneous file upload/download operations
+     *
+     * NOTE: Due to BufferedReader conflict in ClientMain's listener thread, we use
+     * traditional stream I/O but with large buffers (64KB) and NIO FileChannel for writing.
+     * This provides good performance while avoiding the protocol conflict.
+     */
+    public void downloadFileNIO(String filename, long fileSize, FileTransferListener listener) {
+        // Create a new thread for download operation to allow simultaneous operations
+        Thread downloadThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // Notify start
+                    if (listener != null) {
+                        listener.onTransferStarted(filename, fileSize);
+                    }
+
+                    // CRITICAL: Pause listener BEFORE sending command to prevent it from reading file data
+                    client.beginFileTransfer();
+                    System.out.println("[FileTransferHandler] Listener paused, sending download request");
+
+                    // Send download request to server
+                    client.requestDownload(filename);
+
+                    // Wait for server to send FILE_SIZE response and file data
+                    // During this time, the listener is paused and won't consume anything
+                    Thread.sleep(200);
+
+                    // Get socket input stream - now safe to read without listener interference
+                    Socket socket = client.getSocket();
+                    InputStream inputStream = socket.getInputStream();
+
+                    // Prepare output file with NIO
+                    File outputFile = new File(localDirectory, filename);
+                    java.nio.file.Path outputPath = outputFile.toPath();
+
+                    // Create parent directories if they don't exist
+                    if (outputFile.getParentFile() != null) {
+                        outputFile.getParentFile().mkdirs();
+                    }
+
+                    System.out.println("[Client] Starting download of " + filename + " (" + fileSize + " bytes)");
+                    System.out.println("[Client] Output path: " + outputPath.toAbsolutePath());
+
+                    // Use NIO FileChannel for efficient file writing
+                    try (java.nio.channels.FileChannel fileChannel = java.nio.channels.FileChannel.open(
+                            outputPath,
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                            java.nio.file.StandardOpenOption.WRITE)) {
+
+                        // Use large buffer (64KB) for efficient reading
+                        byte[] buffer = new byte[64 * 1024];
+                        int bytesRead;
+                        long totalBytesReceived = 0;
+                        int lastProgress = 0;
+
+                        System.out.println("[Client] Starting to read from InputStream...");
+
+                        // Read file data from input stream
+                        while (totalBytesReceived < fileSize &&
+                               (bytesRead = inputStream.read(buffer, 0,
+                                   (int) Math.min(buffer.length, fileSize - totalBytesReceived))) != -1) {
+
+                            System.out.println("[Client] Read " + bytesRead + " bytes from stream");
+
+                            // Write to file using NIO
+                            java.nio.ByteBuffer byteBuffer = java.nio.ByteBuffer.wrap(buffer, 0, bytesRead);
+                            while (byteBuffer.hasRemaining()) {
+                                fileChannel.write(byteBuffer);
+                            }
+
+                            totalBytesReceived += bytesRead;
+
+                            // Notify progress
+                            if (listener != null && fileSize > 0) {
+                                int progress = (int) ((totalBytesReceived * 100) / fileSize);
+                                if (progress != lastProgress) {
+                                    listener.onProgressUpdate(filename, progress);
+                                    lastProgress = progress;
+                                }
+                            }
+                        }
+
+                        // Force write to disk
+                        fileChannel.force(true);
+
+                        System.out.println("File downloaded successfully: " + filename +
+                                         " (" + totalBytesReceived + " bytes)");
+                        System.out.println("File saved to: " + outputFile.getAbsolutePath());
+
+                        // Verify file size
+                        if (totalBytesReceived != fileSize) {
+                            System.err.println("WARNING: Downloaded size (" + totalBytesReceived +
+                                             ") doesn't match expected size (" + fileSize + ")");
+                        }
+                    }
+
+                    // Verify file exists and has correct size
+                    if (outputFile.exists()) {
+                        long actualSize = outputFile.length();
+                        System.out.println("✅ VERIFIED: File exists on disk, size: " + actualSize + " bytes");
+                        if (actualSize != fileSize) {
+                            System.err.println("⚠️ WARNING: File size on disk (" + actualSize +
+                                             ") doesn't match expected (" + fileSize + ")");
+                        }
+                    } else {
+                        System.err.println("❌ ERROR: File does NOT exist at: " + outputFile.getAbsolutePath());
+                    }
+
+                    // Notify completion
+                    if (listener != null) {
+                        listener.onTransferCompleted(filename, false);
+                    }
+
+                    // CRITICAL: Resume the listener thread
+                    client.endFileTransfer();
+
+                } catch (IOException e) {
+                    System.err.println("Error downloading file: " + e.getMessage());
+                    e.printStackTrace();
+
+                    // CRITICAL: Resume the listener thread even on error
+                    client.endFileTransfer();
+
+                    if (listener != null) {
+                        listener.onTransferFailed(filename, e.getMessage());
+                    }
+                } catch (InterruptedException e) {
+                    System.err.println("Download interrupted: " + e.getMessage());
+
+                    // CRITICAL: Resume the listener thread even on interruption
+                    client.endFileTransfer();
+
+                    if (listener != null) {
+                        listener.onTransferFailed(filename, "Download interrupted");
+                    }
+                }
+            }
+        });
+
+        downloadThread.start();
+    }
+
 
     /**
      * Listener interface for file transfer events
