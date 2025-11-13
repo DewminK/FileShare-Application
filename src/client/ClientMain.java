@@ -13,6 +13,8 @@ public class ClientMain {
     private int serverPort;
     private boolean connected;
     private List<ConnectionListener> listeners;
+    private volatile boolean fileTransferInProgress = false;
+    private final Object transferLock = new Object();
 
     public ClientMain(String serverAddress, int serverPort) {
         this.serverAddress = serverAddress;
@@ -64,6 +66,18 @@ public class ClientMain {
                 try {
                     String response;
                     while (connected && (response = in.readLine()) != null) {
+                        // Wait if file transfer is in progress
+                        synchronized (transferLock) {
+                            while (fileTransferInProgress) {
+                                try {
+                                    transferLock.wait();
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    return;
+                                }
+                            }
+                        }
+
                         System.out.println("Server says: " + response);
                         notifyMessageReceived(response);
                     }
@@ -125,6 +139,41 @@ public class ClientMain {
 
     public Socket getSocket() {
         return socket;
+    }
+
+    /**
+     * Get the raw InputStream from the socket for file transfers.
+     * WARNING: This bypasses the BufferedReader used by the listener thread.
+     * Use with caution - only for binary file transfers where you know exactly
+     * how many bytes to read.
+     */
+    public InputStream getRawInputStream() throws IOException {
+        if (socket != null && !socket.isClosed()) {
+            return socket.getInputStream();
+        }
+        throw new IOException("Socket is not connected");
+    }
+
+    /**
+     * Signal that a file transfer is starting - pauses the listener thread
+     * to prevent it from consuming binary file data
+     */
+    public void beginFileTransfer() {
+        synchronized (transferLock) {
+            fileTransferInProgress = true;
+        }
+        System.out.println("[ClientMain] File transfer mode activated - listener paused");
+    }
+
+    /**
+     * Signal that a file transfer has ended - resumes the listener thread
+     */
+    public void endFileTransfer() {
+        synchronized (transferLock) {
+            fileTransferInProgress = false;
+            transferLock.notifyAll();
+        }
+        System.out.println("[ClientMain] File transfer mode deactivated - listener resumed");
     }
 
     public void addConnectionListener(ConnectionListener listener) {
